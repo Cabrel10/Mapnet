@@ -1,0 +1,45 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Aéroport international de Yaoundé Nsimalen",
+        "type": "airport",
+        "altitude_max_m": 0
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [11.5231, 3.8315],
+            [11.5531, 3.8315],
+            [11.5531, 3.8515],
+            [11.5231, 3.8515],
+            [11.5231, 3.8315]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Base militaire aérienne de Yaoundé",
+        "type": "military",
+        "altitude_max_m": 150
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [11.5010, 3.8500],
+            [11.5110, 3.8500],
+            [11.5110, 3.8600],
+            [11.5010, 3.8600],
+            [11.5010, 3.8500]
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+# Go
+bin/
+*.test
+# Rust
+target/
+# Node
+node_modules/
+dist/
+# Python leftovers
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+# Env
+.env

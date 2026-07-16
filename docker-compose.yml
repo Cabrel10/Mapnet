@@ -1,0 +1,270 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # INFRASTRUCTURE DE BASE
+  # ============================================================
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: mapnet_postgis
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-quamtechs_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secure_password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+      - ./scripts/init-postgis.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    networks:
+      - mapnet_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-quamtechs_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: mapnet_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - mapnet_network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: mapnet_kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LOG_DIRS: '/tmp/kraft-combined-logs'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+    networks:
+      - mapnet_network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # MICROSERVICES MÉTIER
+  # ============================================================
+  gps-collect:
+    build:
+      context: ./services/gps-collect
+      dockerfile: Dockerfile
+    container_name: mapnet_gps_collect
+    environment:
+      SERVICE_NAME: gps-collect
+      PORT: 8081
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-secure_password}@postgis:5432/${POSTGRES_DB:-quamtechs_db}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      KAFKA_TOPIC_GPS_RAW: ${KAFKA_TOPIC_GPS_RAW:-quamtechs.mapnet.gps.raw}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+    ports:
+      - "8081:8081"
+    volumes:
+      - gpx_uploads:/app/uploads
+    depends_on:
+      postgis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mapnet_network
+    restart: unless-stopped
+
+  map-engine:
+    build:
+      context: ./services/map-engine
+      dockerfile: Dockerfile
+    container_name: mapnet_map_engine
+    environment:
+      SERVICE_NAME: map-engine
+      PORT: 8082
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-secure_password}@postgis:5432/${POSTGRES_DB:-quamtechs_db}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      KAFKA_TOPIC_GPS_RAW: ${KAFKA_TOPIC_GPS_RAW:-quamtechs.mapnet.gps.raw}
+      KAFKA_TOPIC_MAPNET_EDGES: ${KAFKA_TOPIC_MAPNET_EDGES:-quamtechs.mapnet.edges.detected}
+      KAFKA_GROUP_ID: map-engine-consumer
+      ROUTING_SERVICE_URL: http://routing:8085
+      MAPMATCHING_THRESHOLD: "15.0"
+      MIN_CONFIRMATIONS: "3"
+    depends_on:
+      postgis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      routing:
+        condition: service_started
+    networks:
+      - mapnet_network
+    restart: unless-stopped
+
+  places:
+    build:
+      context: ./services/places
+      dockerfile: Dockerfile
+    container_name: mapnet_places
+    environment:
+      SERVICE_NAME: places
+      PORT: 8083
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-secure_password}@postgis:5432/${POSTGRES_DB:-quamtechs_db}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}
+      KAFKA_TOPIC_PLACES: ${KAFKA_TOPIC_PLACES:-quamtechs.mapnet.places.raw}
+      SCRAPE_CITIES: ${SCRAPE_CITIES:-Yaoundé,Douala}
+      OSM_API_URL: ${OSM_API_URL:-https://overpass-api.de/api/interpreter}
+    depends_on:
+      postgis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - mapnet_network
+    restart: unless-stopped
+
+  ccaa-compliance:
+    build:
+      context: ./services/ccaa-compliance
+      dockerfile: Dockerfile
+    container_name: mapnet_ccaa_compliance
+    environment:
+      SERVICE_NAME: ccaa-compliance
+      PORT: 8084
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-secure_password}@postgis:5432/${POSTGRES_DB:-quamtechs_db}
+      NOFLY_ZONES_FILE: ${CCAA_NOFLY_ZONES_FILE:-/app/data/nofly-zones.geojson}
+    ports:
+      - "8084:8084"
+    volumes:
+      - ./services/ccaa-compliance/data:/app/data:ro
+    depends_on:
+      postgis:
+        condition: service_healthy
+    networks:
+      - mapnet_network
+    restart: unless-stopped
+
+  routing:
+    build:
+      context: ./services/routing
+      dockerfile: Dockerfile
+    container_name: mapnet_routing
+    environment:
+      SERVICE_NAME: routing
+      PORT: 8085
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-secure_password}@postgis:5432/${POSTGRES_DB:-quamtechs_db}
+      OSRM_URL: ${OSRM_URL:-http://router.project-osrm.org}
+      OSRM_LOCAL_URL: ${OSRM_LOCAL_URL:-}
+    ports:
+      - "8085:8085"
+    depends_on:
+      postgis:
+        condition: service_healthy
+    networks:
+      - mapnet_network
+    restart: unless-stopped
+
+  auth:
+    build:
+      context: ./services/auth
+      dockerfile: Dockerfile
+    container_name: mapnet_auth
+    environment:
+      SERVICE_NAME: auth
+      PORT: 8086
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-secure_password}@postgis:5432/${POSTGRES_DB:-quamtechs_db}
+      JWT_SECRET: ${JWT_SECRET:-mapnet-jwt-secret-change-in-production}
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+    ports:
+      - "8086:8086"
+    depends_on:
+      postgis:
+        condition: service_healthy
+    networks:
+      - mapnet_network
+    restart: unless-stopped
+
+  # ============================================================
+  # GATEWAY & FRONTEND
+  # ============================================================
+  api-gateway:
+    image: kong:3.5
+    container_name: mapnet_api_gateway
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong/declarative/kong.yml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+      KONG_ADMIN_GUI_URL: "http://localhost:8002"
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+    volumes:
+      - ./services/api-gateway/kong.yml:/kong/declarative/kong.yml:ro
+    networks:
+      - mapnet_network
+    depends_on:
+      - gps-collect
+      - map-engine
+      - places
+      - ccaa-compliance
+      - routing
+      - auth
+
+  web-frontend:
+    build:
+      context: ./services/web-frontend
+      dockerfile: Dockerfile
+    container_name: mapnet_web_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: "http://localhost:8000"
+      REACT_APP_MAP_STYLE: "osm"
+    networks:
+      - mapnet_network
+    depends_on:
+      - api-gateway
+
+volumes:
+  postgis_data:
+  redis_data:
+  gpx_uploads:
+
+networks:
+  mapnet_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
