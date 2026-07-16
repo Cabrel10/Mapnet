@@ -43,7 +43,7 @@ def health():
     return HealthResponse(status="ok", service=SERVICE_NAME)
 
 
-@app.post("/api/v1/places/scrape", response_model=POI, response_model=None)
+@app.post("/api/v1/places/scrape")
 def scrape_pois(city: str):
     try:
         pois = fetch_pois(city)
@@ -101,7 +101,8 @@ def scrape_all():
 def nearby_places(lat: float, lon: float, radius: float = 500.0, category: Optional[str] = None):
     with SessionLocal() as session:
         sql = """
-            SELECT place_id, name, category, latitude, longitude
+            SELECT place_id, name, category,
+                   ST_Y(geom) AS latitude, ST_X(geom) AS longitude
             FROM raw_places
             WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography, :radius)
         """
@@ -120,7 +121,8 @@ def search_places(q: str, limit: int = 20):
         rows = session.execute(
             text(
                 """
-                SELECT place_id, name, category, latitude, longitude
+                SELECT place_id, name, category,
+                       ST_Y(geom) AS latitude, ST_X(geom) AS longitude
                 FROM raw_places
                 WHERE name ILIKE :q
                 LIMIT :limit
