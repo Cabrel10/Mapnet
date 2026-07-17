@@ -1,0 +1,69 @@
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: gps-collect
+    url: http://gps-collect:8081
+    routes:
+      - name: gps-collect-routes
+        paths:
+          - /api/v1/collecte
+          - /api/v1/traces
+        strip_path: false
+
+  - name: map-engine
+    url: http://map-engine:8082
+    routes:
+      - name: map-engine-routes
+        paths:
+          - /api/v1/map
+        strip_path: false
+
+  - name: places
+    url: http://places:8083
+    routes:
+      - name: places-routes
+        paths:
+          - /api/v1/places
+        strip_path: false
+
+  - name: ccaa-compliance
+    url: http://ccaa-compliance:8084
+    routes:
+      - name: ccaa-compliance-routes
+        paths:
+          - /api/v1/drone
+        strip_path: false
+
+  - name: routing
+    url: http://routing:8085
+    routes:
+      - name: routing-routes
+        paths:
+          - /api/v1/routing
+        strip_path: false
+
+  - name: auth
+    url: http://auth:8086
+    routes:
+      - name: auth-routes
+        paths:
+          - /api/v1/auth
+        strip_path: false
+
+  - name: frontend
+    url: http://web-frontend:3000
+    routes:
+      - name: frontend-routes
+        paths:
+          - /
+        strip_path: false
+
+plugins:
+  - name: rate-limiting
+    config:
+      minute: 60
+      policy: local
+  - name: file-log
+    config:
+      path: /tmp/kong.log

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="MapNet Test Generator" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Sample Yaoundé Trace</name>
+    <time>2026-07-16T12:00:00Z</time>
+  </metadata>
+  <trk>
+    <name>Trajet_Test_Yaounde</name>
+    <trkseg>
+      <trkpt lat="3.8480" lon="11.5021">
+        <ele>720.5</ele>
+        <time>2026-07-16T12:00:00Z</time>
+      </trkpt>
+      <trkpt lat="3.8481" lon="11.5022">
+        <ele>721.0</ele>
+        <time>2026-07-16T12:00:10Z</time>
+      </trkpt>
+      <trkpt lat="3.8482" lon="11.5023">
+        <ele>721.2</ele>
+        <time>2026-07-16T12:00:20Z</time>
+      </trkpt>
+      <trkpt lat="3.8483" lon="11.5024">
+        <ele>721.5</ele>
+        <time>2026-07-16T12:00:30Z</time>
+      </trkpt>
+      <trkpt lat="3.8484" lon="11.5025">
+        <ele>722.0</ele>
+        <time>2026-07-16T12:00:40Z</time>
+      </trkpt>
+      <trkpt lat="3.8485" lon="11.5026">
+        <ele>722.4</ele>
+        <time>2026-07-16T12:00:50Z</time>
+      </trkpt>
+      <trkpt lat="3.8486" lon="11.5027">
+        <ele>723.0</ele>
+        <time>2026-07-16T12:01:00Z</time>
+      </trkpt>
+      <trkpt lat="3.8487" lon="11.5028">
+        <ele>723.5</ele>
+        <time>2026-07-16T12:01:10Z</time>
+      </trkpt>
+      <trkpt lat="3.8488" lon="11.5029">
+        <ele>724.0</ele>
+        <time>2026-07-16T12:01:20Z</time>
+      </trkpt>
+      <trkpt lat="3.8489" lon="11.5030">
+        <ele>724.5</ele>
+        <time>2026-07-16T12:01:30Z</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>
