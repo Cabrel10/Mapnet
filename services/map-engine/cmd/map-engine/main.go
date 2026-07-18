@@ -76,6 +76,8 @@ func main() {
 	mux.HandleFunc("GET /health", a.health)
 	mux.HandleFunc("GET /api/v1/map/edges/nearby", a.nearby)
 	mux.HandleFunc("GET /api/v1/map/edges", a.list)
+	mux.HandleFunc("GET /api/v1/sync/manifest", a.manifest)
+	mux.HandleFunc("GET /api/v1/sync/delta", a.mapDelta)
 
 	srv := &http.Server{Addr: ":" + port, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -191,4 +193,44 @@ func (a *api) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "count": len(edges), "edges": edges})
+}
+
+// manifest returns the current version of every dataset (Git-like HEAD).
+// Mobile clients call this first, then request deltas for datasets they lag on.
+func (a *api) manifest(w http.ResponseWriter, r *http.Request) {
+	versions, err := a.db.Manifest(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "manifest failed"})
+		return
+	}
+	m := map[string]int64{}
+	for _, v := range versions {
+		m[v.Dataset] = v.Version
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "versions": m})
+}
+
+// mapDelta returns only edge changes newer than ?since=vN, geometry as encoded
+// polyline. This is the offline-sync transmission core: no full download, ever.
+func (a *api) mapDelta(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	since, _ := strconv.ParseInt(q.Get("since"), 10, 64)
+	limit := 1000
+	if v, err := strconv.Atoi(q.Get("limit")); err == nil && v > 0 && v <= 5000 {
+		limit = v
+	}
+	deltas, head, err := a.db.MapDelta(r.Context(), since, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "delta failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":         "ok",
+		"dataset":        "map",
+		"since":          since,
+		"head":           head,
+		"count":          len(deltas),
+		"has_more":       len(deltas) == limit,
+		"changes":        deltas,
+	})
 }
