@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -92,4 +93,43 @@ func (s *Store) MapDelta(ctx context.Context, since int64, limit int) ([]EdgeDel
 		out = append(out, d)
 	}
 	return out, head, rows.Err()
+}
+
+// EdgesGeoJSON returns all non-deleted edges as a GeoJSON FeatureCollection,
+// ready to be added as a MapLibre source. Geometry built server-side by PostGIS.
+func (s *Store) EdgesGeoJSON(ctx context.Context, limit int) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if limit <= 0 || limit > 20000 {
+		limit = 5000
+	}
+	var fc json.RawMessage
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(
+		  json_build_object(
+		    'type','FeatureCollection',
+		    'features', COALESCE(json_agg(f.feature), '[]'::json)
+		  )::text::json,
+		  '{"type":"FeatureCollection","features":[]}'::json)
+		FROM (
+		  SELECT json_build_object(
+		    'type','Feature',
+		    'id', edge_id,
+		    'properties', json_build_object(
+		        'edge_id', edge_id,
+		        'status', status,
+		        'highway_type', highway_type,
+		        'confirmation_count', confirmation_count,
+		        'version', version),
+		    'geometry', ST_AsGeoJSON(geom)::json
+		  ) AS feature
+		  FROM mapnet_edges
+		  WHERE is_deleted = false AND geom IS NOT NULL
+		  ORDER BY id
+		  LIMIT $1
+		) f`, limit).Scan(&fc)
+	if err != nil {
+		return nil, err
+	}
+	return fc, nil
 }

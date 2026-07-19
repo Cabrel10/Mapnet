@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/quamtech/mapnet/map-engine/internal/edge"
+	"github.com/Cabrel10/Mapnet/services/map-engine/internal/edge"
 )
 
 // Store wraps a pgx pool.

@@ -1,4 +1,4 @@
-module github.com/quamtech/mapnet/map-engine
+module github.com/Cabrel10/Mapnet/services/map-engine
 
 go 1.22
 

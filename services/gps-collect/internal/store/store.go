@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/quamtech/mapnet/gps-collect/internal/gpx"
+	"github.com/Cabrel10/Mapnet/services/gps-collect/internal/gpx"
 )
 
 // Store owns a pgx connection pool.

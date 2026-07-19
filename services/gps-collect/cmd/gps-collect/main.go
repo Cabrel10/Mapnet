@@ -16,9 +16,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/quamtech/mapnet/gps-collect/internal/broker"
-	"github.com/quamtech/mapnet/gps-collect/internal/gpx"
-	"github.com/quamtech/mapnet/gps-collect/internal/store"
+	"github.com/Cabrel10/Mapnet/services/gps-collect/internal/broker"
+	"github.com/Cabrel10/Mapnet/services/gps-collect/internal/gpx"
+	"github.com/Cabrel10/Mapnet/services/gps-collect/internal/store"
 )
 
 const maxUploadBytes = 32 << 20 // 32 MiB cap on GPX upload
@@ -61,11 +61,25 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           mux,
+		Handler:           withCORS(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("gps-collect listening on :%s", port)
 	log.Fatal(srv.ListenAndServe())
+}
+
+// withCORS enables the browser frontend to upload GPX cross-origin (local test).
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -1,4 +1,4 @@
-module github.com/quamtech/mapnet/gps-collect
+module github.com/Cabrel10/Mapnet/services/gps-collect
 
 go 1.22
 

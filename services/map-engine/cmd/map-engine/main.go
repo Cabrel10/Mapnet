@@ -15,10 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/quamtech/mapnet/map-engine/internal/broker"
-	"github.com/quamtech/mapnet/map-engine/internal/edge"
-	"github.com/quamtech/mapnet/map-engine/internal/routing"
-	"github.com/quamtech/mapnet/map-engine/internal/store"
+	"github.com/Cabrel10/Mapnet/services/map-engine/internal/broker"
+	"github.com/Cabrel10/Mapnet/services/map-engine/internal/edge"
+	"github.com/Cabrel10/Mapnet/services/map-engine/internal/routing"
+	"github.com/Cabrel10/Mapnet/services/map-engine/internal/store"
 )
 
 func env(k, def string) string {
@@ -76,10 +76,11 @@ func main() {
 	mux.HandleFunc("GET /health", a.health)
 	mux.HandleFunc("GET /api/v1/map/edges/nearby", a.nearby)
 	mux.HandleFunc("GET /api/v1/map/edges", a.list)
+	mux.HandleFunc("GET /api/v1/map/edges.geojson", a.edgesGeoJSON)
 	mux.HandleFunc("GET /api/v1/sync/manifest", a.manifest)
 	mux.HandleFunc("GET /api/v1/sync/delta", a.mapDelta)
 
-	srv := &http.Server{Addr: ":" + port, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: ":" + port, Handler: withCORS(mux), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -148,6 +149,21 @@ func process(ctx context.Context, db *store.Store, rc *routing.Client,
 	}
 }
 
+// withCORS allows the browser frontend (served from a different origin) to
+// call this API for local testing of latency, bandwidth and bottlenecks.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -193,6 +209,21 @@ func (a *api) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "count": len(edges), "edges": edges})
+}
+
+// edgesGeoJSON serves all edges as a GeoJSON FeatureCollection for MapLibre.
+func (a *api) edgesGeoJSON(w http.ResponseWriter, r *http.Request) {
+	limit := 5000
+	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
+		limit = v
+	}
+	fc, err := a.db.EdgesGeoJSON(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "geojson failed"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/geo+json")
+	_, _ = w.Write(fc)
 }
 
 // manifest returns the current version of every dataset (Git-like HEAD).
