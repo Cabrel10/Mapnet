@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<!-- MAPNET — browser test console
+     Repository: github.com/Cabrel10/Mapnet
+     Served by the Go gateway (single origin, no CORS). All API calls are
+     relative and reverse-proxied by the gateway:
+       /api/gps/*  -> gps-collect (GPX upload)
+       /api/map/*  -> map-engine  (edges GeoJSON + versioned sync) -->
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAPNET — Console carte</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; font-family: system-ui, sans-serif; }
+  #app { display:flex; height:100%; }
+  #map { flex:1; }
+  #panel { width:340px; background:#0f172a; color:#e2e8f0; padding:14px; overflow-y:auto; }
+  h1 { font-size:16px; margin:0 0 10px; color:#38bdf8; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:#94a3b8; margin:16px 0 6px; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:6px; padding:8px 12px; cursor:pointer; font-size:13px; margin:2px 0; }
+  button:hover { background:#1d4ed8; }
+  input,select { width:100%; padding:7px; border-radius:6px; border:1px solid #334155; background:#1e293b; color:#e2e8f0; margin:3px 0; }
+  .metric { display:flex; justify-content:space-between; font-size:12px; padding:3px 0; border-bottom:1px solid #1e293b; }
+  .metric b { color:#4ade80; }
+  pre { background:#020617; padding:8px; border-radius:6px; font-size:11px; max-height:180px; overflow:auto; white-space:pre-wrap; }
+  .ok { color:#4ade80; } .err { color:#f87171; }
+  .row { display:flex; gap:6px; } .row button { flex:1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="map"></div>
+  <div id="panel">
+    <h1>MAPNET — Console carte</h1>
+
+    <h2>Couche edges (routes détectées)</h2>
+    <div class="row">
+      <button onclick="loadEdges()">Charger edges</button>
+      <button onclick="fitEdges()">Zoom edges</button>
+    </div>
+    <label style="font-size:12px;display:flex;align-items:center;gap:6px;margin-top:6px">
+      <input type="checkbox" id="autoSync" checked style="width:auto" />
+      Sync automatique (manifest/delta, sans recharger)
+    </label>
+
+    <h2>Upload GPX</h2>
+    <input type="file" id="gpxFile" accept=".gpx" />
+    <input id="driver" value="browser-test" />
+    <button onclick="uploadGPX()">Envoyer GPX</button>
+
+    <h2>Synchronisation versionnée</h2>
+    <div class="row">
+      <button onclick="manifest()">Manifest</button>
+      <button onclick="delta()">Delta (since 0)</button>
+    </div>
+
+    <h2>Métriques (latence / volume)</h2>
+    <div id="metrics"></div>
+
+    <h2>Journal</h2>
+    <pre id="log"></pre>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+// Same-origin relative paths — the Go gateway reverse-proxies these.
+const gps = () => '/api/gps';
+const mep = () => '/api/map';
+function log(msg, cls){ const p=$('log'); p.innerHTML = `<span class="${cls||''}">${new Date().toLocaleTimeString()} ${msg}</span>\n` + p.innerHTML; }
+function metric(k,v){ $('metrics').insertAdjacentHTML('afterbegin', `<div class="metric"><span>${k}</span><b>${v}</b></div>`); }
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: { osm: { type:'raster', tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize:256, attribution:'© OpenStreetMap' } },
+    layers: [{ id:'osm', type:'raster', source:'osm' }]
+  },
+  center: [11.5021, 3.848], zoom: 13
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+// Timed fetch that records latency + payload size (bandwidth / bottleneck test).
+async function timedFetch(label, url, opts){
+  const t0 = performance.now();
+  const res = await fetch(url, opts);
+  const buf = await res.arrayBuffer();
+  const ms = (performance.now() - t0).toFixed(1);
+  const kb = (buf.byteLength/1024).toFixed(2);
+  metric(`${label} latence`, `${ms} ms`);
+  metric(`${label} volume`, `${kb} KB`);
+  log(`${label}: ${res.status} en ${ms} ms, ${kb} KB`, res.ok?'ok':'err');
+  return { res, text: new TextDecoder().decode(buf) };
+}
+
+async function loadEdges(){
+  try {
+    const { res, text } = await timedFetch('edges.geojson', `${mep()}/api/v1/map/edges.geojson`);
+    // keep track of current head so auto-sync knows the baseline
+    if(res.ok){ try { window._mapVersion = (await (await fetch(`${mep()}/api/v1/sync/manifest`)).json()).versions.map; } catch(e){} }
+    if(!res.ok){ return; }
+    const fc = JSON.parse(text);
+    if(map.getLayer('edges-line')) map.removeLayer('edges-line');
+    if(map.getLayer('edges-pt')) map.removeLayer('edges-pt');
+    if(map.getSource('edges')) map.removeSource('edges');
+    map.addSource('edges', { type:'geojson', data: fc });
+    map.addLayer({ id:'edges-line', type:'line', source:'edges',
+      paint:{ 'line-color':['match',['get','status'],'validated','#22c55e','non_cartographie_osm','#f97316','#38bdf8'], 'line-width':5 } });
+    log(`edges chargés: ${fc.features.length} features`, 'ok');
+    metric('edges features', fc.features.length);
+    window._edges = fc;
+  } catch(e){ log('loadEdges err: '+e, 'err'); }
+}
+
+function fitEdges(){
+  const fc = window._edges;
+  if(!fc || !fc.features.length){ log('aucun edge chargé','err'); return; }
+  const b = new maplibregl.LngLatBounds();
+  fc.features.forEach(f => (f.geometry.coordinates||[]).forEach(c => b.extend(c)));
+  map.fitBounds(b, { padding: 60 });
+}
+
+async function uploadGPX(){
+  const f = $('gpxFile').files[0];
+  if(!f){ log('choisir un fichier GPX','err'); return; }
+  const fd = new FormData();
+  fd.append('file', f); fd.append('chauffeur_id', $('driver').value);
+  try {
+    const { res, text } = await timedFetch('upload GPX', `${gps()}/api/v1/collecte/gpx/upload`, { method:'POST', body: fd });
+    log('réponse: '+text, res.ok?'ok':'err');
+    setTimeout(loadEdges, 4000); // let the pipeline produce the edge
+  } catch(e){ log('upload err: '+e, 'err'); }
+}
+
+async function manifest(){
+  const { text } = await timedFetch('manifest', `${mep()}/api/v1/sync/manifest`);
+  log('manifest: '+text, 'ok');
+}
+async function delta(){
+  const { text } = await timedFetch('delta', `${mep()}/api/v1/sync/delta?since=0`);
+  const d = JSON.parse(text);
+  log(`delta: ${d.count} changements, head=${d.head}`, 'ok');
+}
+
+// Phase 4 — auto-refresh: poll the manifest; when map version grows, pull the
+// delta and update the MapLibre source in place (no page reload).
+let _syncing = false;
+async function pollSync(){
+  if(!$('autoSync').checked || _syncing) return;
+  _syncing = true;
+  try {
+    const m = await (await fetch(`${mep()}/api/v1/sync/manifest`)).json();
+    const head = m.versions.map;
+    if(window._mapVersion === undefined){ window._mapVersion = head; }
+    else if(head > window._mapVersion){
+      const since = window._mapVersion;
+      const { text } = await timedFetch('delta auto', `${mep()}/api/v1/sync/delta?since=${since}`);
+      const d = JSON.parse(text);
+      log(`nouvelle version carte ${since} -> ${head} : ${d.count} route(s) mise(s) à jour`, 'ok');
+      window._mapVersion = head;
+      // reload the full edge layer so new routes appear instantly
+      await loadEdges();
+      fitEdges();
+    }
+  } catch(e){ /* silent: upstream may be briefly busy */ }
+  finally { _syncing = false; }
+}
+setInterval(pollSync, 3000);
+
+map.on('load', loadEdges);
+</script>
+</body>
+</html>
