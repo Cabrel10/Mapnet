@@ -1,0 +1,29 @@
+name: mapnet_mobile_client
+description: >
+  MapNet — Client mobile Offline-First / DTN (Delay-Tolerant Networking).
+  Moteur de synchronisation différentielle avec la Gateway Go, décodage de
+  polylines PostGIS sur l'appareil, base SQLite locale et tuiles MBTiles
+  hors-ligne (Data Mule).
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  sqflite: ^2.3.0
+  path: ^1.9.0
+  path_provider: ^2.1.0
+  maplibre_gl: ^0.20.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

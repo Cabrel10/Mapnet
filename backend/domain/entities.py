@@ -1,0 +1,93 @@
+"""MapNet DOMAIN — Entités & Value Objects + Schema Versioning.
+
+L'agrégat racine est `Capture` : une observation géospatiale terrain qui
+possède un état (machine à états), un trust score (pipeline qualité) et une
+liste d'événements de domaine non encore publiés.
+
+Schema Versioning : chaque capture porte un `schema_version`. Le module
+`schema.py` gère la migration V1 -> V2 et le rollback.
+"""
+from __future__ import annotations
+
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from .state_machine import CaptureState, CaptureStateMachine
+from .quality import QualityReport
+from .events import DomainEvent, gps_captured
+
+
+SCHEMA_VERSION = 2  # version courante du schéma de capture
+
+
+@dataclass
+class GeoPoint:
+    """Value object : un point géographique."""
+    lat: float
+    lon: float
+    accuracy_m: float = 10.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"lat": self.lat, "lon": self.lon, "accuracy_m": self.accuracy_m}
+
+
+@dataclass
+class Capture:
+    """Agrégat racine : une capture géospatiale terrain."""
+    point: GeoPoint
+    kind: str = "gps"  # gps | poi | road_condition | voice
+    label: str = ""
+    schema_version: int = SCHEMA_VERSION
+    capture_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    created_at: float = field(default_factory=time.time)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    _sm: CaptureStateMachine = field(default_factory=CaptureStateMachine)
+    quality: Optional[QualityReport] = None
+    _pending_events: List[DomainEvent] = field(default_factory=list)
+
+    # --- Comportements métier ------------------------------------------- #
+    def record_gps(self) -> None:
+        self._pending_events.append(
+            gps_captured(self.capture_id, self.point.lat, self.point.lon,
+                         self.point.accuracy_m,
+                         speed=self.metadata.get("speed"))
+        )
+
+    def set_quality(self, report: QualityReport) -> None:
+        self.quality = report
+
+    @property
+    def state(self) -> CaptureState:
+        return self._sm.state
+
+    def advance(self, target: CaptureState) -> None:
+        self._sm.transition(target)
+
+    def can_advance_mesh(self) -> bool:
+        return self._sm.can_transition(CaptureState.MESH_SHARED)
+
+    def collect_events(self) -> List[DomainEvent]:
+        evts = list(self._pending_events)
+        self._pending_events.clear()
+        return evts
+
+    @property
+    def trust_score(self) -> float:
+        return self.quality.trust_score if self.quality else 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "capture_id": self.capture_id,
+            "kind": self.kind,
+            "label": self.label,
+            "schema_version": self.schema_version,
+            "created_at": self.created_at,
+            "point": self.point.to_dict(),
+            "state": self._sm.state.value,
+            "state_history": [s.value for s in self._sm.history],
+            "trust_score": round(self.trust_score, 4),
+            "quality": self.quality.to_dict() if self.quality else None,
+            "metadata": self.metadata,
+        }

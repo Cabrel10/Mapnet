@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MapNet — Carte géospatiale collaborative</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    :root{--bg:#0e1116;--panel:#161b22;--accent:#2ea043;--muted:#8b949e;--border:#30363d;}
+    *{box-sizing:border-box;}
+    html,body{margin:0;height:100%;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:#e6edf3;}
+    #app{display:grid;grid-template-columns:340px 1fr;height:100vh;}
+    #sidebar{background:var(--panel);border-right:1px solid var(--border);padding:16px;overflow-y:auto;}
+    #map{height:100vh;}
+    h1{font-size:19px;margin:0 0 4px;display:flex;align-items:center;gap:8px;}
+    .tag{font-size:11px;background:var(--accent);color:#03260f;border-radius:10px;padding:2px 8px;font-weight:700;}
+    .sub{color:var(--muted);font-size:12px;margin-bottom:16px;}
+    .card{background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px;}
+    .card h2{font-size:13px;margin:0 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
+    .stat{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;}
+    .stat b{color:#e6edf3;}
+    .pill{display:inline-block;font-size:11px;padding:2px 7px;border-radius:6px;margin:2px 3px 2px 0;border:1px solid var(--border);}
+    .st-NEW{color:#8b949e}.st-LOCAL{color:#58a6ff}.st-ENCRYPTED{color:#d29922}
+    .st-MESH_SHARED{color:#bc8cff}.st-GATEWAY_UPLOADED{color:#f778ba}
+    .st-SERVER_CONFIRMED{color:#2ea043}.st-ARCHIVED{color:#6e7681}
+    button{background:var(--accent);color:#03260f;border:0;border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;width:100%;margin-top:6px;}
+    button.sec{background:#21262d;color:#e6edf3;border:1px solid var(--border);}
+    .evt{font-size:11px;font-family:ui-monospace,monospace;color:var(--muted);padding:2px 0;border-bottom:1px dashed #21262d;}
+    .evt b{color:#58a6ff;}
+    .trust-bar{height:6px;border-radius:3px;background:#21262d;overflow:hidden;margin-top:4px;}
+    .trust-fill{height:100%;background:linear-gradient(90deg,#f85149,#d29922,#2ea043);}
+  </style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <h1>🗺️ MapNet <span class="tag">DDD · Event-Driven</span></h1>
+    <div class="sub">Écosystème géospatial collaboratif — capture terrain, mesh, sync passerelle, trust score.</div>
+
+    <div class="card">
+      <h2>Statistiques</h2>
+      <div class="stat"><span>Captures</span><b id="s-total">–</b></div>
+      <div class="stat"><span>Événements domaine</span><b id="s-events">–</b></div>
+      <div class="stat"><span>Trust moyen</span><b id="s-trust">–</b></div>
+      <div class="trust-bar"><div class="trust-fill" id="s-trust-bar" style="width:0%"></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Machine à états</h2>
+      <div id="s-states"></div>
+    </div>
+
+    <div class="card">
+      <h2>Plugins capteurs</h2>
+      <div id="s-plugins"></div>
+    </div>
+
+    <div class="card">
+      <h2>Ajouter une capture</h2>
+      <div class="sub" style="margin:0 0 6px">Clique sur la carte pour choisir un point, puis :</div>
+      <button id="btn-add">➕ Créer une capture GPS ici</button>
+      <button class="sec" id="btn-refresh">🔄 Rafraîchir</button>
+    </div>
+
+    <div class="card">
+      <h2>Événements récents</h2>
+      <div id="s-evts"></div>
+    </div>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const COLORS={NEW:"#8b949e",LOCAL:"#58a6ff",ENCRYPTED:"#d29922",MESH_SHARED:"#bc8cff",GATEWAY_UPLOADED:"#f778ba",SERVER_CONFIRMED:"#2ea043",ARCHIVED:"#6e7681"};
+let map, layer, lastClick=null;
+
+function initMap(){
+  map = L.map('map').setView([12.3714,-1.5197], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {maxZoom:19, attribution:'© OpenStreetMap · MapNet'}).addTo(map);
+  layer = L.layerGroup().addTo(map);
+  map.on('click', e=>{ lastClick=e.latlng; L.popup().setLatLng(e.latlng)
+    .setContent(`Point sélectionné<br>${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`).openOn(map); });
+}
+
+async function loadGeo(){
+  const gj = await (await fetch('/api/captures.geojson')).json();
+  layer.clearLayers();
+  (gj.features||[]).forEach(f=>{
+    const [lon,lat]=f.geometry.coordinates, p=f.properties;
+    const c=COLORS[p.state]||"#888";
+    L.circleMarker([lat,lon],{radius:6,color:c,fillColor:c,fillOpacity:.8,weight:2})
+     .bindPopup(`<b>${p.label||p.kind}</b><br>état: <span style="color:${c}">${p.state}</span>`+
+                `<br>trust: ${(p.trust_score*100).toFixed(0)}%`+
+                (p.flags&&p.flags.length?`<br>⚠️ ${p.flags.join(', ')}`:''))
+     .addTo(layer);
+  });
+}
+
+async function loadStats(){
+  const s=await (await fetch('/api/stats')).json();
+  document.getElementById('s-total').textContent=s.total;
+  document.getElementById('s-events').textContent=s.events;
+  document.getElementById('s-trust').textContent=(s.avg_trust*100).toFixed(0)+'%';
+  document.getElementById('s-trust-bar').style.width=(s.avg_trust*100).toFixed(0)+'%';
+  document.getElementById('s-states').innerHTML=Object.entries(s.by_state||{})
+    .map(([k,v])=>`<span class="pill st-${k}">${k}: ${v}</span>`).join('');
+}
+async function loadPlugins(){
+  const p=await (await fetch('/api/plugins')).json();
+  document.getElementById('s-plugins').innerHTML=p
+    .map(x=>`<span class="pill" style="color:${x.enabled?'#2ea043':'#6e7681'}">${x.name}</span>`).join('');
+}
+async function loadEvents(){
+  const e=await (await fetch('/api/events')).json();
+  document.getElementById('s-evts').innerHTML=e.slice().reverse().slice(0,12)
+    .map(x=>`<div class="evt"><b>${x.event_type}</b> · ${x.aggregate_id.slice(0,6)}</div>`).join('');
+}
+async function refresh(){ await Promise.all([loadGeo(),loadStats(),loadPlugins(),loadEvents()]); }
+
+document.getElementById('btn-add').onclick=async()=>{
+  const ll=lastClick||map.getCenter();
+  await fetch('/api/captures',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({lat:ll.lat,lon:ll.lng,kind:'gps',label:'manuel',
+      signals:{accuracy_m:5,satellites:10,imu_consistency:0.95,sensor_confidence:0.9}})});
+  await refresh();
+};
+document.getElementById('btn-refresh').onclick=refresh;
+
+initMap(); refresh(); setInterval(refresh, 15000);
+</script>
+</body>
+</html>
