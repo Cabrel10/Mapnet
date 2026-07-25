@@ -47,7 +47,8 @@
     <application
         android:label="MapNet Terrain"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -66,13 +67,6 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-
-        <!-- Service de collecte GPS en avant-plan (capture continue Data Mule) -->
-        <service
-            android:name="dev.fluttercommunity.plus.androidalarmmanager.AlarmService"
-            android:permission="android.permission.BIND_JOB_SERVICE"
-            android:exported="false"
-            android:foregroundServiceType="location" />
 
         <meta-data
             android:name="flutterEmbedding"

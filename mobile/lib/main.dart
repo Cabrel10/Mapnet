@@ -2,15 +2,28 @@
 // MAPNET MOBILE — Application Android terrain (Offline-First / DTN / Mesh)
 // Flutter 3.24 • Android 10+ (API 29-34)
 // Style : Dark Mode Tactique / High-Contrast Geospatial
+//
+// v2 (refonte terrain) :
+//   - Onboarding permissions runtime (plus d'ADB manuel).
+//   - GPS RÉEL : flux temps réel, centrage caméra, marqueur "MA POSITION".
+//   - Capture à la position GPS réelle du téléphone (plus le centre de carte).
+//   - Synchronisation BIDIRECTIONNELLE avec le VPS (push + pull autres agents).
+//   - HUD précision réelle (m) + cercle d'incertitude autour de l'utilisateur.
 // =============================================================================
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'database/local_store.dart';
 import 'models/capture.dart';
+import 'services/geo_utils.dart';
+import 'services/gps_service.dart';
+import 'services/sync_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -55,13 +68,17 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
   final MapController _mapController = MapController();
   final LocalStore _store = LocalStore.instance;
 
-  // Point de départ : Ouagadougou (cohérent avec le seed du serveur DDD).
-  static const LatLng _origin = LatLng(12.3714, -1.5197);
+  static const LatLng _fallback = LatLng(12.3714, -1.5197); // Ouagadougou
 
   List<Capture> _captures = [];
-  double _gpsAccuracy = 4.2; // mètres (HDOP simulée en preview)
+  LatLng? _myPos; // position GPS réelle de l'appareil
+  double _accuracyM = 0; // précision horizontale réelle (m)
   int _pendingSync = 0;
-  String _netMode = 'MESH P2P'; // ONLINE / MESH P2P / DTN LOCAL
+  String _netMode = 'HORS-LIGNE';
+  bool _permGranted = false;
+  bool _followMe = true; // la caméra suit l'utilisateur
+
+  StreamSubscription<Position>? _posSub;
 
   @override
   void initState() {
@@ -69,13 +86,64 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
     _bootstrap();
   }
 
+  @override
+  void dispose() {
+    _posSub?.cancel();
+    SyncService.instance.stop();
+    super.dispose();
+  }
+
   Future<void> _bootstrap() async {
     await _store.init();
-    final existing = await _store.loadCaptures();
-    if (existing.isEmpty) {
-      await _store.seedDemo(_origin);
-    }
     await _refresh();
+
+    // 1) Permissions runtime (onboarding).
+    final res = await GpsService.instance.ensurePermissions();
+    if (res == GpsPermissionResult.granted) {
+      setState(() => _permGranted = true);
+      _startGps();
+      _startSync();
+    } else {
+      if (mounted) _showPermissionSheet(res);
+    }
+  }
+
+  void _startGps() {
+    _posSub?.cancel();
+    _posSub = GpsService.instance.stream().listen((p) {
+      final ll = LatLng(p.latitude, p.longitude);
+      setState(() {
+        _myPos = ll;
+        _accuracyM = p.accuracy;
+      });
+      if (_followMe) {
+        _mapController.move(ll, _mapController.camera.zoom);
+      }
+    });
+    // Fix initial rapide.
+    GpsService.instance.current().then((p) {
+      final ll = LatLng(p.latitude, p.longitude);
+      setState(() {
+        _myPos = ll;
+        _accuracyM = p.accuracy;
+      });
+      _mapController.move(ll, 16);
+    }).catchError((_) {});
+  }
+
+  void _startSync() {
+    SyncService.instance.start((outcome) async {
+      await _refresh();
+      if (!mounted) return;
+      setState(() {
+        _netMode = outcome.online ? 'EN LIGNE (VPS)' : 'HORS-LIGNE';
+      });
+      if (outcome.online && (outcome.pushed > 0 || outcome.pulled > 0)) {
+        _toast(
+            'Sync ↑${outcome.pushed} ↓${outcome.pulled} avec le serveur',
+            const Color(0xFF00E5A0));
+      }
+    });
   }
 
   Future<void> _refresh() async {
@@ -87,27 +155,58 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
   }
 
   Future<void> _capture(CaptureType type) async {
-    // Capture 1-tap au centre de la carte (offline, écrit dans SQLite local).
-    final center = _mapController.camera.center;
+    if (!_permGranted || _myPos == null) {
+      _toast('Position GPS indisponible — vérifiez les permissions',
+          const Color(0xFFEF4444));
+      return;
+    }
+    // CAPTURE À LA POSITION GPS RÉELLE (plus le centre de la carte).
+    Position pos;
+    try {
+      pos = await GpsService.instance.current();
+    } catch (_) {
+      _toast('Fix GPS échoué, réessayez', const Color(0xFFEF4444));
+      return;
+    }
+    final acc = pos.accuracy;
+    // Trust score dérivé de la précision réelle : plus précis => plus fiable.
+    final trust = (1.0 - (acc / 50.0)).clamp(0.2, 0.98);
     final c = Capture(
       id: 'cap_${DateTime.now().millisecondsSinceEpoch}',
-      lat: center.latitude,
-      lon: center.longitude,
+      lat: pos.latitude,
+      lon: pos.longitude,
       type: type,
-      trustScore: 0.55 + (type == CaptureType.poi ? 0.30 : 0.10),
+      trustScore: trust,
       syncState: 'PENDING',
       createdAt: DateTime.now(),
+      accuracyM: acc,
+      owner: 1,
     );
     await _store.insertCapture(c);
     await _refresh();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        backgroundColor: const Color(0xFF121821),
-        content: Text('Capture ${type.label} enregistrée localement (SQLite)',
-            style: const TextStyle(color: Color(0xFF00E5A0))),
-        duration: const Duration(seconds: 2),
-      ));
-    }
+    _toast(
+        '${type.label} @ ±${acc.toStringAsFixed(1)} m — file de synchro',
+        const Color(0xFF00E5A0));
+    // Tente une synchro immédiate.
+    SyncService.instance.syncOnce().then((o) {
+      _refresh();
+      if (mounted) setState(() => _netMode = o.online ? 'EN LIGNE (VPS)' : 'HORS-LIGNE');
+    });
+  }
+
+  void _recenter() {
+    if (_myPos == null) return;
+    setState(() => _followMe = true);
+    _mapController.move(_myPos!, 16);
+  }
+
+  void _toast(String msg, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      backgroundColor: const Color(0xFF121821),
+      content: Text(msg, style: TextStyle(color: color)),
+      duration: const Duration(seconds: 2),
+    ));
   }
 
   Color _trustColor(double t) {
@@ -118,17 +217,23 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final center = _myPos ?? _fallback;
     return Scaffold(
       body: Stack(
         children: [
-          // -- Carte offline-first (tuiles OSM raster, cache local) --
           FlutterMap(
             mapController: _mapController,
-            options: const MapOptions(
-              initialCenter: _origin,
-              initialZoom: 13.5,
+            options: MapOptions(
+              initialCenter: center,
+              initialZoom: 15.5,
               minZoom: 3,
               maxZoom: 18,
+              // Dès que l'utilisateur bouge la carte à la main, on arrête de le suivre.
+              onPositionChanged: (pos, hasGesture) {
+                if (hasGesture && _followMe) {
+                  setState(() => _followMe = false);
+                }
+              },
             ),
             children: [
               TileLayer(
@@ -136,25 +241,56 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                 userAgentPackageName: 'com.cabrel10.mapnet_mobile',
                 tileProvider: NetworkTileProvider(),
               ),
+
+              // Cercle d'incertitude autour de MA position (précision réelle).
+              if (_myPos != null && _accuracyM > 0)
+                CircleLayer(circles: [
+                  CircleMarker(
+                    point: _myPos!,
+                    radius: _accuracyM,
+                    useRadiusInMeter: true,
+                    color: const Color(0xFF2196F3).withOpacity(0.15),
+                    borderColor: const Color(0xFF2196F3).withOpacity(0.6),
+                    borderStrokeWidth: 1.5,
+                  ),
+                ]),
+
+              // Marqueurs des captures (les miennes + celles des autres agents).
               MarkerLayer(
                 markers: _captures
                     .map((c) => Marker(
                           point: LatLng(c.lat, c.lon),
                           width: 34,
                           height: 34,
-                          child: Icon(c.type.icon,
-                              color: _trustColor(c.trustScore), size: 30),
+                          child: Icon(
+                            c.type.icon,
+                            color: _trustColor(c.trustScore),
+                            size: c.owner == 1 ? 30 : 26,
+                            shadows: c.owner == 0
+                                ? const [Shadow(color: Colors.black, blurRadius: 3)]
+                                : null,
+                          ),
                         ))
                     .toList(),
               ),
+
+              // Marqueur "MA POSITION" (bleu, distinct des captures).
+              if (_myPos != null)
+                MarkerLayer(markers: [
+                  Marker(
+                    point: _myPos!,
+                    width: 26,
+                    height: 26,
+                    child: _MeDot(),
+                  ),
+                ]),
             ],
           ),
 
-          // -- HUD de télémesure (en-tête) --
           _buildHud(),
-
-          // -- Indicateur de synchronisation (bas) --
           _buildSyncBadge(),
+          if (_myPos != null) _buildNearbyButton(),
+          if (!_followMe && _myPos != null) _buildRecenterButton(),
         ],
       ),
       floatingActionButton: _buildCaptureFabs(),
@@ -162,6 +298,7 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
   }
 
   Widget _buildHud() {
+    final hdop = GpsService.hdopFromAccuracy(_accuracyM);
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -175,14 +312,35 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _hudTile(Icons.gps_fixed, 'GPS',
-                  '${_gpsAccuracy.toStringAsFixed(1)} m', const Color(0xFF00E5A0)),
-              _hudTile(Icons.hub, 'RÉSEAU', _netMode,
-                  _netMode == 'ONLINE' ? const Color(0xFF00E5A0) : const Color(0xFFF57C00)),
-              _hudTile(Icons.storage, 'LOCAL',
-                  '${_captures.length} pts', Colors.white),
-              _hudTile(Icons.sync_problem, 'ATTENTE',
-                  '$_pendingSync', _pendingSync == 0 ? const Color(0xFF00E5A0) : const Color(0xFFEF4444)),
+              _hudTile(
+                  Icons.gps_fixed,
+                  'GPS',
+                  _myPos == null
+                      ? '—'
+                      : '±${_accuracyM.toStringAsFixed(1)} m',
+                  _myPos == null
+                      ? const Color(0xFFEF4444)
+                      : (_accuracyM <= 15
+                          ? const Color(0xFF00E5A0)
+                          : const Color(0xFFF57C00))),
+              _hudTile(Icons.satellite_alt, 'HDOP',
+                  _myPos == null ? '—' : hdop.toStringAsFixed(1), Colors.white),
+              _hudTile(
+                  Icons.hub,
+                  'RÉSEAU',
+                  _netMode.startsWith('EN LIGNE') ? 'EN LIGNE' : 'HORS-LIGNE',
+                  _netMode.startsWith('EN LIGNE')
+                      ? const Color(0xFF00E5A0)
+                      : const Color(0xFFF57C00)),
+              _hudTile(
+                  Icons.storage, 'PTS', '${_captures.length}', Colors.white),
+              _hudTile(
+                  Icons.sync_problem,
+                  'ATTENTE',
+                  '$_pendingSync',
+                  _pendingSync == 0
+                      ? const Color(0xFF00E5A0)
+                      : const Color(0xFFEF4444)),
             ],
           ),
         ),
@@ -206,6 +364,102 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
     );
   }
 
+  Widget _buildRecenterButton() {
+    return Positioned(
+      right: 16,
+      bottom: 210,
+      child: FloatingActionButton.small(
+        heroTag: 'recenter',
+        backgroundColor: const Color(0xFF1F2A38),
+        onPressed: _recenter,
+        child: const Icon(Icons.my_location, color: Color(0xFF2196F3)),
+      ),
+    );
+  }
+
+  /// Bouton "lieux à proximité" (navigation terrain).
+  Widget _buildNearbyButton() {
+    return Positioned(
+      right: 16,
+      bottom: 270,
+      child: FloatingActionButton.small(
+        heroTag: 'nearby',
+        backgroundColor: const Color(0xFF1F2A38),
+        onPressed: _showNearby,
+        child: const Icon(Icons.explore, color: Color(0xFF00E5A0)),
+      ),
+    );
+  }
+
+  /// Liste des captures triées par distance depuis MA position (proximité).
+  void _showNearby() {
+    if (_myPos == null) {
+      _toast('Position inconnue', const Color(0xFFEF4444));
+      return;
+    }
+    final me = _myPos!;
+    final ranked = _captures
+        .map((c) => (
+              cap: c,
+              dist: GeoUtils.distanceMeters(me, LatLng(c.lat, c.lon)),
+              brg: GeoUtils.bearingDeg(me, LatLng(c.lat, c.lon)),
+            ))
+        .toList()
+      ..sort((a, b) => a.dist.compareTo(b.dist));
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF121821),
+      showDragHandle: true,
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.5,
+        maxChildSize: 0.85,
+        builder: (_, scroll) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Text('LIEUX À PROXIMITÉ',
+                  style: TextStyle(
+                      color: Color(0xFF00E5A0),
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.5)),
+            ),
+            Expanded(
+              child: ListView.builder(
+                controller: scroll,
+                itemCount: ranked.length,
+                itemBuilder: (_, i) {
+                  final r = ranked[i];
+                  return ListTile(
+                    leading: Icon(r.cap.type.icon,
+                        color: _trustColor(r.cap.trustScore)),
+                    title: Text(r.cap.type.label,
+                        style: const TextStyle(color: Colors.white)),
+                    subtitle: Text(
+                      '${GeoUtils.humanDistance(r.dist)} · ${GeoUtils.compass(r.brg)} · '
+                      '${r.cap.owner == 1 ? "à moi" : "autre agent"}',
+                      style: const TextStyle(color: Color(0xFF9FB0C3)),
+                    ),
+                    trailing: const Icon(Icons.navigation,
+                        color: Color(0xFFF57C00), size: 18),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      setState(() => _followMe = false);
+                      _mapController.move(LatLng(r.cap.lat, r.cap.lon), 17);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSyncBadge() {
     final syncing = _pendingSync > 0;
     return Positioned(
@@ -217,19 +471,25 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
           color: const Color(0xFF121821).withOpacity(0.92),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-              color: syncing ? const Color(0xFFF57C00) : const Color(0xFF00E5A0)),
+              color: syncing
+                  ? const Color(0xFFF57C00)
+                  : const Color(0xFF00E5A0)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(syncing ? Icons.cloud_upload : Icons.cloud_done,
                 size: 16,
-                color: syncing ? const Color(0xFFF57C00) : const Color(0xFF00E5A0)),
+                color: syncing
+                    ? const Color(0xFFF57C00)
+                    : const Color(0xFF00E5A0)),
             const SizedBox(width: 6),
             Text(
-              syncing ? 'TRANSIT MESH / DTN' : 'SYNCHRO SERVEUR',
+              syncing ? '$_pendingSync EN TRANSIT' : 'SYNCHRONISÉ',
               style: TextStyle(
-                  color: syncing ? const Color(0xFFF57C00) : const Color(0xFF00E5A0),
+                  color: syncing
+                      ? const Color(0xFFF57C00)
+                      : const Color(0xFF00E5A0),
                   fontSize: 11,
                   fontWeight: FontWeight.bold),
             ),
@@ -264,6 +524,113 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
           child: const Icon(Icons.add_location_alt, color: Colors.white),
         ),
       ],
+    );
+  }
+
+  // --- Onboarding permissions (modale) ---
+  void _showPermissionSheet(GpsPermissionResult res) {
+    final msg = switch (res) {
+      GpsPermissionResult.serviceDisabled =>
+        'La localisation de l\'appareil est désactivée. Activez le GPS pour cartographier le terrain.',
+      GpsPermissionResult.deniedForever =>
+        'Permission refusée définitivement. Ouvrez les réglages pour autoriser la localisation.',
+      _ =>
+        'MapNet a besoin de votre position pour vous situer sur la carte, capturer des points géoréférencés et vous guider vers les lieux à proximité.',
+    };
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF121821),
+      isDismissible: false,
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.location_on, color: Color(0xFFF57C00), size: 40),
+            const SizedBox(height: 12),
+            const Text('Autorisation de localisation',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Text(msg, style: const TextStyle(color: Color(0xFF9FB0C3))),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF57C00)),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  if (res == GpsPermissionResult.deniedForever) {
+                    await GpsService.instance.openSettings();
+                  } else {
+                    await _bootstrap();
+                  }
+                },
+                child: Text(
+                    res == GpsPermissionResult.deniedForever
+                        ? 'OUVRIR LES RÉGLAGES'
+                        : 'AUTORISER',
+                    style: const TextStyle(
+                        color: Colors.black, fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Point bleu animé "MA POSITION" (halo pulsant).
+class _MeDot extends StatefulWidget {
+  @override
+  State<_MeDot> createState() => _MeDotState();
+}
+
+class _MeDotState extends State<_MeDot> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+      vsync: this, duration: const Duration(seconds: 2))
+    ..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, __) {
+        final t = _c.value;
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            Container(
+              width: 10 + 16 * t,
+              height: 10 + 16 * t,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF2196F3).withOpacity((1 - t) * 0.4),
+              ),
+            ),
+            Container(
+              width: 14,
+              height: 14,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF2196F3),
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

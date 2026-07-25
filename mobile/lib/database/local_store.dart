@@ -20,7 +20,7 @@ class LocalStore {
     final path = p.join(dir.path, 'mapnet_terrain.db');
     _db = await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE captures (
@@ -30,7 +30,9 @@ class LocalStore {
             type TEXT NOT NULL,
             trust_score REAL NOT NULL,
             sync_state TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            accuracy_m REAL NOT NULL DEFAULT 0,
+            owner INTEGER NOT NULL DEFAULT 1
           )
         ''');
         await db.execute('''
@@ -41,6 +43,14 @@ class LocalStore {
             message TEXT NOT NULL
           )
         ''');
+      },
+      onUpgrade: (db, oldV, newV) async {
+        if (oldV < 2) {
+          await db.execute(
+              'ALTER TABLE captures ADD COLUMN accuracy_m REAL NOT NULL DEFAULT 0');
+          await db.execute(
+              'ALTER TABLE captures ADD COLUMN owner INTEGER NOT NULL DEFAULT 1');
+        }
       },
     );
   }
@@ -57,6 +67,36 @@ class LocalStore {
     return rows.map(Capture.fromMap).toList();
   }
 
+  /// Captures locales pas encore confirmées par le serveur (à uploader).
+  Future<List<Capture>> unsynced() async {
+    if (_db == null) await init();
+    final rows = await _db!.query(
+      'captures',
+      where: "sync_state != ?",
+      whereArgs: ['SYNCED'],
+      orderBy: 'created_at ASC',
+    );
+    return rows.map(Capture.fromMap).toList();
+  }
+
+  Future<void> markSynced(String id) async {
+    await _db!.update('captures', {'sync_state': 'SYNCED'},
+        where: 'id = ?', whereArgs: [id]);
+    await _log('INFO', 'Capture $id confirmée par le serveur');
+  }
+
+  Future<void> markState(String id, String state) async {
+    await _db!.update('captures', {'sync_state': state},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Insère/actualise une capture provenant du serveur (download, autres agents).
+  /// Marquée SYNCED car elle est déjà côté serveur — évite un renvoi en boucle.
+  Future<void> upsertRemote(Capture c) async {
+    await _db!.insert('captures', c.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
   Future<void> _log(String level, String message) async {
     await _db!.insert('local_telemetry', {
       'ts': DateTime.now().toIso8601String(),
@@ -68,7 +108,7 @@ class LocalStore {
   /// Amorçage de démonstration autour d'un point d'origine (parité serveur DDD).
   Future<void> seedDemo(dynamic origin) async {
     final rnd = Random(42);
-    final types = CaptureType.values;
+    const types = CaptureType.values;
     for (var i = 0; i < 8; i++) {
       final dLat = (rnd.nextDouble() - 0.5) * 0.06;
       final dLon = (rnd.nextDouble() - 0.5) * 0.06;

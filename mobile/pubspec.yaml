@@ -48,7 +48,10 @@ dependencies:
   # Color.toARGB32() (API Flutter 3.27+) et casse compileFlutterBuildRelease.
   geolocator: ^12.0.0          # GPS + HDOP/VDOP + détection sauts aberrants (compat Flutter 3.24)
 
-  # --- Réseau (sync HTTP différée) ---
+  # --- Permissions runtime (Android 10+) ---
+  permission_handler: ^11.3.0  # demande interactive Location/Storage au lancement
+
+  # --- Réseau (sync HTTP différée vers le VPS) ---
   http: ^1.2.2
 
 dev_dependencies:
