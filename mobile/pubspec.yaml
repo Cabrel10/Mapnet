@@ -43,7 +43,10 @@ dependencies:
   path_provider: ^2.1.4
 
   # --- Géolocalisation haute précision ---
-  geolocator: ^13.0.1          # GPS + HDOP/VDOP + détection sauts aberrants
+  # geolocator 12.x -> geolocator_android 4.x : dernière ligne compatible
+  # Flutter 3.24.5. La 14.x tire geolocator_android 5.0.3 qui appelle
+  # Color.toARGB32() (API Flutter 3.27+) et casse compileFlutterBuildRelease.
+  geolocator: ^12.0.0          # GPS + HDOP/VDOP + détection sauts aberrants (compat Flutter 3.24)
 
   # --- Réseau (sync HTTP différée) ---
   http: ^1.2.2

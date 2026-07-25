@@ -1,3 +1,13 @@
+// MAPNET MOBILE — Configuration Gradle unifiée de niveau racine
+// Repository: github.com/Cabrel10/Mapnet
+//
+// Correctif AGP 8.1 <-> plugins Flutter (ex: geolocator_android 5.0.3) :
+//   geolocator lit `flutter.compileSdkVersion` / `flutter.minSdkVersion`
+//   (build.gradle du plugin, lignes 29/32), mais l'objet `flutter` n'existe
+//   qu'au niveau du module :app et est invisible aux sous-projets plugins,
+//   d'où « unknown property 'flutter' » puis « substring() on null object ».
+//   Solution : exposer un objet d'extension `flutter` sur CHAQUE sous-projet.
+
 allprojects {
     repositories {
         google()
@@ -6,11 +16,47 @@ allprojects {
 }
 
 rootProject.buildDir = "../build"
+
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
+
+    // Injecte l'extension `flutter` attendue par les plugins tiers (geolocator),
+    // AVANT évaluation. On EXCLUT :app car le module applicatif possède déjà la
+    // vraie extension `flutter` fournie par dev.flutter.flutter-gradle-plugin —
+    // la remplacer casserait « Must provide Flutter source directory ».
+    if (project.name != "app" && !project.ext.has("flutter")) {
+        project.ext.flutter = [
+            compileSdkVersion: 34,
+            targetSdkVersion : 34,
+            minSdkVersion    : 29,
+            ndkVersion       : "26.1.10909125"
+        ]
+    }
+
+    // Filet de sécurité : force compileSdk + namespace pour les plugins qui ne
+    // déclarent toujours rien. On enregistre afterEvaluate AVANT tout
+    // evaluationDependsOn afin d'éviter « Cannot run afterEvaluate when the
+    // project is already evaluated ». On saute :app (déjà géré par Flutter).
+    if (project.name != "app") {
+        project.afterEvaluate { p ->
+            if (p.hasProperty("android")) {
+                p.android {
+                    compileSdkVersion 34
+                    if (namespace == null) {
+                        namespace p.group
+                    }
+                }
+            }
+        }
+    }
 }
+
+// Assure que :app est évalué avant les plugins (dépendance de configuration),
+// enregistré séparément après que les afterEvaluate ci-dessus soient posés.
 subprojects {
-    project.evaluationDependsOn(":app")
+    if (project.name != "app") {
+        project.evaluationDependsOn(":app")
+    }
 }
 
 tasks.register("clean", Delete) {
