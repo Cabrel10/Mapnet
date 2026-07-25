@@ -34,8 +34,27 @@ android {
             // Signature debug pour build de démonstration terrain.
             // TODO production : remplacer par un keystore de release dédié.
             signingConfig = signingConfigs.debug
-            minifyEnabled = false
-            shrinkResources = false
+            // Optimisation taille : R8 (minification bytecode) + suppression
+            // des ressources non référencées. Règles ProGuard dans
+            // proguard-rules.pro pour protéger les plugins natifs (JNI).
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    // Découpage par architecture CPU : un APK dédié par ABI au lieu d'un fat
+    // APK universel qui embarque libflutter.so 3 fois. arm64-v8a couvre les
+    // téléphones modernes, armeabi-v7a l'entrée de gamme 32-bit.
+    splits {
+        abi {
+            enable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            universalApk = false
         }
     }
 }
