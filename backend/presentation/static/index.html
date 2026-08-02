@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>MapNet — Navigation géospatiale</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <style>
+    :root{
+      --bg:#0e1116;--panel:rgba(22,27,34,.96);--accent:#1a73e8;--green:#34a853;
+      --amber:#fbbc04;--red:#ea4335;--muted:#9aa0a6;--border:#3c4043;--text:#e8eaed;
+    }
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+    html,body{margin:0;height:100%;font-family:Roboto,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--text);overflow:hidden;}
+    #map{position:absolute;inset:0;z-index:1;}
+
+    /* ---- Barre de recherche flottante (style Google Maps) ---- */
+    .search-wrap{position:absolute;top:14px;left:14px;z-index:1000;width:min(400px,calc(100% - 28px));}
+    .search-box{display:flex;align-items:center;background:#fff;border-radius:28px;box-shadow:0 2px 8px rgba(0,0,0,.35);overflow:hidden;}
+    .search-box .mn-logo{padding:0 6px 0 16px;font-size:20px;}
+    .search-box input{flex:1;border:0;outline:0;padding:14px 8px;font-size:15px;color:#202124;background:transparent;}
+    .search-box .ic{padding:0 14px;color:#5f6368;cursor:pointer;font-size:18px;user-select:none;}
+    .search-results{background:#fff;color:#202124;border-radius:14px;margin-top:6px;box-shadow:0 2px 8px rgba(0,0,0,.35);max-height:50vh;overflow-y:auto;display:none;}
+    .neighborhood-filter{margin-top:8px;width:100%;padding:9px 14px;border:1px solid var(--border);border-radius:18px;background:var(--panel);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.25);}
+    .agent-marker{width:18px;height:18px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 2px #1a73e8,0 2px 6px #000;}
+    .agent-marker.offline{background:#777;box-shadow:0 0 0 2px #777,0 2px 6px #000;}
+    .agent-marker.online{background:#1a73e8;animation:pulse 2s infinite;}
+    .search-results.on{display:block;}
+    .sr-item{padding:11px 16px;border-bottom:1px solid #eee;cursor:pointer;display:flex;gap:10px;align-items:flex-start;font-size:14px;}
+    .sr-item:hover{background:#f1f3f4;}
+    .sr-item .pin{color:var(--accent);}
+    .sr-item small{color:#5f6368;display:block;}
+
+    /* ---- Contrôles flottants droite ---- */
+    .ctrl{position:absolute;right:14px;z-index:1000;display:flex;flex-direction:column;gap:10px;}
+    .ctrl.top{top:14px;}
+    .ctrl.bot{bottom:120px;}
+    .fab{width:46px;height:46px;border-radius:50%;background:#fff;color:#5f6368;border:0;box-shadow:0 2px 6px rgba(0,0,0,.35);font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+    .fab:active{background:#e8eaed;}
+    .fab.accent{color:var(--accent);}
+
+    /* ---- Panneau info bas (style GMaps place card) ---- */
+    .sheet{position:absolute;left:50%;transform:translateX(-50%);bottom:14px;z-index:1000;width:min(420px,calc(100% - 28px));background:var(--panel);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:16px;padding:14px 16px;box-shadow:0 4px 20px rgba(0,0,0,.5);display:none;}
+    .sheet.on{display:block;}
+    .sheet h3{margin:0 0 2px;font-size:16px;}
+    .sheet .meta{color:var(--muted);font-size:13px;margin-bottom:10px;}
+    .sheet .row{display:flex;gap:8px;}
+    .sheet button{flex:1;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:10px;font-weight:600;cursor:pointer;font-size:13px;}
+    .sheet button.sec{background:#2a2f36;color:var(--text);}
+    .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:8px;background:#2a2f36;margin-right:4px;}
+
+    /* ---- Barre stats en bas (compacte) ---- */
+    .statbar{position:absolute;left:14px;bottom:14px;z-index:900;background:var(--panel);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:12px;padding:8px 12px;font-size:12px;display:flex;gap:14px;align-items:center;box-shadow:0 2px 10px rgba(0,0,0,.4);}
+    .statbar b{color:var(--green);}
+    .statbar .dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-right:5px;animation:pulse 2s infinite;}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+    /* ---- Toast ---- */
+    .toast{position:absolute;top:76px;left:50%;transform:translateX(-50%);z-index:1200;background:#202124;color:#fff;padding:10px 18px;border-radius:24px;font-size:13px;box-shadow:0 2px 10px rgba(0,0,0,.5);opacity:0;transition:opacity .3s;pointer-events:none;}
+    .toast.on{opacity:1;}
+    .route-info{position:absolute;top:76px;left:14px;z-index:1000;background:var(--accent);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;font-weight:600;box-shadow:0 2px 10px rgba(0,0,0,.4);display:none;}
+    .route-info.on{display:block;}
+    .leaflet-routing-container{display:none;}
+    @media(max-width:560px){.statbar{font-size:11px;gap:10px;}}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<!-- Recherche -->
+<div class="search-wrap">
+  <div class="search-box">
+    <span class="mn-logo">🗺️</span>
+    <input id="q" type="text" placeholder="Rechercher un lieu, une adresse…" autocomplete="off" />
+    <span class="ic" id="q-clear" title="Effacer">✕</span>
+    <span class="ic" id="q-go" title="Rechercher">🔍</span>
+  </div>
+  <div class="search-results" id="results"></div>
+  <select class="neighborhood-filter" id="neighborhood-filter" aria-label="Filtrer par quartier">
+    <option value="">Tous les quartiers</option>
+  </select>
+</div>
+
+<!-- Contrôles haut droite : couches -->
+<div class="ctrl top">
+  <button class="fab" id="btn-layer" title="Changer de fond">🛰️</button>
+</div>
+
+<!-- Contrôles bas droite : ma position, zoom -->
+<div class="ctrl bot">
+  <button class="fab" id="btn-add" title="Créer une capture ici">➕</button>
+  <button class="fab accent" id="btn-locate" title="Ma position">📍</button>
+</div>
+
+<!-- Bandeau itinéraire -->
+<div class="route-info" id="route-info"></div>
+
+<!-- Barre de stats live -->
+<div class="statbar" id="statbar">
+  <span><span class="dot"></span>LIVE</span>
+  <span>Captures <b id="s-total">–</b></span>
+  <span>Trust <b id="s-trust">–</b></span>
+  <span>Agents <b id="s-agents">1</b></span>
+</div>
+
+<!-- Panneau détails d'un point -->
+<div class="sheet" id="sheet">
+  <h3 id="sh-title">—</h3>
+  <div class="meta" id="sh-meta"></div>
+  <div class="row">
+    <button id="sh-route">🧭 Itinéraire</button>
+    <button class="sec" id="sh-close">Fermer</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script>
+const KIND_ICON={road_condition:"⚠️",gps:"📡",poi:"📍",voice:"🎙️",photo:"📷"};
+const STATE_COLOR={NEW:"#9aa0a6",LOCAL:"#1a73e8",ENCRYPTED:"#fbbc04",MESH_SHARED:"#bc8cff",GATEWAY_UPLOADED:"#f778ba",SERVER_CONFIRMED:"#34a853",ARCHIVED:"#6e7681"};
+const YAOUNDE=[3.8480,11.5021];
+
+let map, cluster, meMarker=null, meCircle=null, selected=null, routeLine=null, pickMode=false;
+let neighborhoodFilter='';
+const layers={};
+let curLayer='streets';
+
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),2200);}
+
+function initMap(){
+  map=L.map('map',{zoomControl:false}).setView(YAOUNDE,13);
+  layers.streets=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap · MapNet'});
+  layers.sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'© Esri · MapNet'});
+  layers.streets.addTo(map);
+  L.control.zoom({position:'bottomright'}).addTo(map);
+  cluster=L.markerClusterGroup({maxClusterRadius:45,showCoverageOnHover:false});
+  map.addLayer(cluster);
+
+  map.on('click',e=>{
+    if(pickMode){ createCapture(e.latlng); pickMode=false; document.getElementById('btn-add').classList.remove('accent'); }
+  });
+}
+
+/* ---------- Captures (données live du serveur) ---------- */
+async function loadMap(){
+  try{
+    const gj=await (await fetch('/api/map.geojson')).json();
+    cluster.clearLayers();
+    const neighborhoods=new Set();
+    let agents=0;
+    (gj.features||[]).forEach(f=>{
+      const [lon,lat]=f.geometry.coordinates,p=f.properties||{};
+      if(p.feature_type==='device'){
+        agents++;
+        const state=p.is_online?'online':'offline';
+        const icon=L.divIcon({className:'',html:`<div class="agent-marker ${state}"></div>`,iconSize:[22,22],iconAnchor:[11,11]});
+        const marker=L.marker([lat,lon],{icon});
+        marker.bindPopup(`<b>${p.name||p.device_id}</b><br>${p.is_online?'En ligne':'Hors ligne'}<br>Dernier heartbeat: ${new Date((p.last_heartbeat_at||0)*1000).toLocaleString()}`);
+        cluster.addLayer(marker);
+        return;
+      }
+      if(p.neighborhood) neighborhoods.add(p.neighborhood);
+      if(neighborhoodFilter && p.neighborhood!==neighborhoodFilter)return;
+      const color=STATE_COLOR[p.state]||"#888";
+      const icon=L.divIcon({className:'',html:`<div style="font-size:22px;filter:drop-shadow(0 1px 2px #000)">${KIND_ICON[p.kind]||"📍"}</div>`,iconSize:[24,24],iconAnchor:[12,12]});
+      const marker=L.marker([lat,lon],{icon});
+      marker.on('click',()=>selectPoint(p,lat,lon,color));
+      cluster.addLayer(marker);
+    });
+    document.getElementById('s-agents').textContent=agents;
+    const select=document.getElementById('neighborhood-filter');
+    const values=[...neighborhoods].sort();
+    select.innerHTML='<option value="">Tous les quartiers</option>'+values.map(n=>`<option value="${n.replace(/"/g,'&quot;')}">${n}</option>`).join('');
+    select.value=neighborhoodFilter;
+  }catch(e){ toast('Serveur injoignable'); }
+}
+async function loadStats(){
+  try{
+    const s=await (await fetch('/api/stats')).json();
+    document.getElementById('s-total').textContent=s.total;
+    document.getElementById('s-trust').textContent=(s.avg_trust*100).toFixed(0)+'%';
+  }catch(e){}
+}
+function selectPoint(p,lat,lon,color){
+  selected={lat,lon,label:p.label||p.kind};
+  document.getElementById('sh-title').textContent=`${KIND_ICON[p.kind]||"📍"} ${p.label||p.kind}`;
+  document.getElementById('sh-meta').innerHTML=
+    `<span class="badge" style="color:${color}">${p.state}</span>`+
+    `<span class="badge">trust ${(p.trust_score*100).toFixed(0)}%</span>`+
+    `<span class="badge">${lat.toFixed(5)}, ${lon.toFixed(5)}</span>`+
+    (p.neighborhood?`<span class="badge">${p.neighborhood}</span>`:'')+
+    (p.flags&&p.flags.length?`<br>⚠️ ${p.flags.join(', ')}`:'');
+  document.getElementById('sheet').classList.add('on');
+  map.panTo([lat,lon]);
+}
+document.getElementById('sh-close').onclick=()=>document.getElementById('sheet').classList.remove('on');
+
+/* ---------- Géolocalisation navigateur ---------- */
+function locateMe(){
+  if(!navigator.geolocation){toast('Géolocalisation non supportée');return;}
+  toast('Localisation…');
+  navigator.geolocation.getCurrentPosition(pos=>{
+    const {latitude:lat,longitude:lon,accuracy}=pos.coords;
+    if(meMarker)map.removeLayer(meMarker); if(meCircle)map.removeLayer(meCircle);
+    meCircle=L.circle([lat,lon],{radius:accuracy,color:'#1a73e8',fillColor:'#1a73e8',fillOpacity:.12,weight:1}).addTo(map);
+    meMarker=L.marker([lat,lon],{icon:L.divIcon({className:'',html:'<div style="width:16px;height:16px;background:#1a73e8;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 2px #1a73e8"></div>',iconSize:[16,16],iconAnchor:[8,8]})}).addTo(map);
+    map.setView([lat,lon],16);
+    toast(`Position ±${accuracy.toFixed(0)} m`);
+  },err=>toast('Position refusée'),{enableHighAccuracy:true,timeout:10000});
+}
+document.getElementById('btn-locate').onclick=locateMe;
+
+/* ---------- Recherche géocodée (Nominatim) ---------- */
+let searchTimer=null;
+async function search(q){
+  if(!q||q.length<3){document.getElementById('results').classList.remove('on');return;}
+  try{
+    const url=`https://nominatim.openstreetmap.org/search?format=json&limit=6&q=${encodeURIComponent(q)}`;
+    const r=await (await fetch(url,{headers:{'Accept-Language':'fr'}})).json();
+    const box=document.getElementById('results');
+    if(!r.length){box.innerHTML='<div class="sr-item">Aucun résultat</div>';box.classList.add('on');return;}
+    box.innerHTML=r.map(x=>`<div class="sr-item" data-lat="${x.lat}" data-lon="${x.lon}"><span class="pin">📍</span><div>${x.display_name.split(',')[0]}<small>${x.display_name}</small></div></div>`).join('');
+    box.classList.add('on');
+    box.querySelectorAll('.sr-item').forEach(el=>{
+      if(!el.dataset.lat)return;
+      el.onclick=()=>{
+        const lat=+el.dataset.lat,lon=+el.dataset.lon;
+        map.setView([lat,lon],16);
+        L.popup().setLatLng([lat,lon]).setContent(el.querySelector('div').firstChild.textContent).openOn(map);
+        box.classList.remove('on');
+        selected={lat,lon,label:el.querySelector('div').firstChild.textContent};
+      };
+    });
+  }catch(e){toast('Recherche indisponible');}
+}
+document.getElementById('q').addEventListener('input',e=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>search(e.target.value),450);});
+document.getElementById('q-go').onclick=()=>search(document.getElementById('q').value);
+document.getElementById('q-clear').onclick=()=>{document.getElementById('q').value='';document.getElementById('results').classList.remove('on');};
+document.getElementById('neighborhood-filter').onchange=e=>{neighborhoodFilter=e.target.value;loadMap();};
+
+/* ---------- Itinéraire (OSRM) depuis ma position ---------- */
+async function routeTo(lat,lon){
+  if(!meMarker){toast('Activez d\'abord votre position 📍');return;}
+  const from=meMarker.getLatLng();
+  toast('Calcul de l\'itinéraire…');
+  try{
+    const url=`https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${lon},${lat}?overview=full&geometries=geojson`;
+    const r=await (await fetch(url)).json();
+    if(!r.routes||!r.routes.length){toast('Aucun itinéraire');return;}
+    const rt=r.routes[0];
+    if(routeLine)map.removeLayer(routeLine);
+    routeLine=L.geoJSON(rt.geometry,{style:{color:'#1a73e8',weight:6,opacity:.85}}).addTo(map);
+    map.fitBounds(routeLine.getBounds(),{padding:[60,60]});
+    const km=(rt.distance/1000).toFixed(1),min=Math.round(rt.duration/60);
+    const ri=document.getElementById('route-info');
+    ri.textContent=`🚗 ${km} km · ${min} min`;ri.classList.add('on');
+  }catch(e){toast('Routage indisponible');}
+}
+document.getElementById('sh-route').onclick=()=>{if(selected)routeTo(selected.lat,selected.lon);};
+
+/* ---------- Créer une capture ---------- */
+document.getElementById('btn-add').onclick=()=>{
+  pickMode=!pickMode;
+  document.getElementById('btn-add').classList.toggle('accent',pickMode);
+  toast(pickMode?'Cliquez sur la carte pour placer le point':'Annulé');
+};
+async function createCapture(ll){
+  try{
+    await fetch('/api/captures',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({lat:ll.lat,lon:ll.lng,kind:'poi',label:'Point web',
+        signals:{accuracy_m:5,source:'web_dashboard'}})});
+    toast('Capture créée ✓');
+    await refresh();
+  }catch(e){toast('Échec création');}
+}
+
+/* ---------- Couches ---------- */
+document.getElementById('btn-layer').onclick=()=>{
+  if(curLayer==='streets'){map.removeLayer(layers.streets);layers.sat.addTo(map);curLayer='sat';document.getElementById('btn-layer').textContent='🗺️';}
+  else{map.removeLayer(layers.sat);layers.streets.addTo(map);curLayer='streets';document.getElementById('btn-layer').textContent='🛰️';}
+};
+
+async function refresh(){await Promise.all([loadMap(),loadStats()]);}
+initMap();refresh();setInterval(refresh,12000);
+</script>
+</body>
+</html>
