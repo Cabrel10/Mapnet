@@ -51,6 +51,24 @@
     <input id="driver" value="browser-test" />
     <button onclick="uploadGPX()">Envoyer GPX</button>
 
+    <h2>Itinéraire (position → destination)</h2>
+    <div class="row">
+      <button onclick="useMyPosition()">📍 Ma position</button>
+      <button onclick="armDestination()">🎯 Poser destination</button>
+    </div>
+    <div class="row">
+      <button onclick="clearRoute()">Effacer itinéraire</button>
+    </div>
+    <div id="routeSummary" style="font-size:13px;margin:6px 0"></div>
+    <div id="routeSteps" style="font-size:12px"></div>
+
+    <h2>Agents en direct</h2>
+    <div class="row">
+      <button onclick="toggleAgents()" id="agentsBtn">👥 Agents (0)</button>
+      <button onclick="loadAgents()">Rafraîchir</button>
+    </div>
+    <div id="agentsList" style="font-size:12px"></div>
+
     <h2>Synchronisation versionnée</h2>
     <div class="row">
       <button onclick="manifest()">Manifest</button>
@@ -143,6 +161,148 @@ async function delta(){
   const { text } = await timedFetch('delta', `${mep()}/api/v1/sync/delta?since=0`);
   const d = JSON.parse(text);
   log(`delta: ${d.count} changements, head=${d.head}`, 'ok');
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Itinéraire guidé : position -> destination (via gateway /api/route/*)
+// ──────────────────────────────────────────────────────────────────────────
+const rte = () => '/api/route';
+let _origin = null;          // {lat, lon}
+let _destination = null;     // {lat, lon}
+let _armDest = false;        // prochain clic carte = destination
+let _markers = [];
+let _destMarker = null;
+let _navWatchId = null;
+
+function _fmtDist(m){ return m >= 1000 ? (m/1000).toFixed(1)+' km' : Math.round(m)+' m'; }
+function _fmtDur(s){ const min = Math.round(s/60); return min >= 60 ? Math.floor(min/60)+' h '+(min%60)+' min' : min+' min'; }
+
+function useMyPosition(){
+  if(!navigator.geolocation){ log('geolocalisation non supportee','err'); return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    _origin = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    log(`position acquise: ${_origin.lat.toFixed(5)}, ${_origin.lon.toFixed(5)}`, 'ok');
+    const el = document.createElement('div');
+    el.style.cssText = 'width:16px;height:16px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 8px #2563eb';
+    _markers.push(new maplibregl.Marker(el).setLngLat([_origin.lon, _origin.lat]).addTo(map));
+    map.flyTo({ center: [_origin.lon, _origin.lat], zoom: 15 });
+    if(_destination) computeRoute();
+  }, err => log('geoloc erreur: '+err.message, 'err'), { enableHighAccuracy: true, timeout: 8000 });
+}
+
+function armDestination(){
+  _armDest = true;
+  log('cliquez sur la carte pour poser la destination', 'ok');
+  map.getCanvas().style.cursor = 'crosshair';
+}
+
+map.on('click', e => {
+  if(!_armDest) return;
+  _armDest = false;
+  map.getCanvas().style.cursor = '';
+  _destination = { lat: e.lngLat.lat, lon: e.lngLat.lng };
+  if(_destMarker) _destMarker.remove();
+  _destMarker = new maplibregl.Marker({ color: '#ef4444' }).setLngLat([_destination.lon, _destination.lat]).addTo(map);
+  log(`destination posee: ${_destination.lat.toFixed(5)}, ${_destination.lon.toFixed(5)}`, 'ok');
+  if(_origin) computeRoute();
+  else log('position inconnue — cliquez "Ma position" d\'abord', 'err');
+});
+
+async function computeRoute(){
+  if(!_origin || !_destination) return;
+  try {
+    const { res, text } = await timedFetch('navigate', `${rte()}/api/v1/routing/navigate`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ from_lat:_origin.lat, from_lon:_origin.lon, to_lat:_destination.lat, to_lon:_destination.lon })
+    });
+    if(!res.ok){ log('navigate: '+text, 'err'); return; }
+    const data = JSON.parse(text);
+    drawRoute(data.route);
+  } catch(e){ log('navigate err: '+e, 'err'); }
+}
+
+function drawRoute(route){
+  // Polyline GeoJSON directement dessinable
+  if(map.getLayer('route-line')) map.removeLayer('route-line');
+  if(map.getLayer('route-casing')) map.removeLayer('route-casing');
+  if(map.getSource('route')) map.removeSource('route');
+  map.addSource('route', { type:'geojson', data:{ type:'Feature', properties:{}, geometry: route.geometry } });
+  map.addLayer({ id:'route-casing', type:'line', source:'route',
+    paint:{ 'line-color':'#0f172a', 'line-width':8, 'line-opacity':0.6 } });
+  map.addLayer({ id:'route-line', type:'line', source:'route',
+    paint:{ 'line-color':'#2563eb', 'line-width':5 } });
+
+  // Zoom sur l'itinéraire
+  const b = new maplibregl.LngLatBounds();
+  route.geometry.coordinates.forEach(c => b.extend(c));
+  map.fitBounds(b, { padding: 80 });
+
+  // Résumé + étapes
+  $('routeSummary').innerHTML = `<b style="color:#4ade80">${_fmtDist(route.distance)} — ${_fmtDur(route.duration)}</b> (${route.steps.length} etapes)`;
+  $('routeSteps').innerHTML = '<ol style="margin:4px 0;padding-left:20px;max-height:200px;overflow-y:auto">' +
+    route.steps.map(s => `<li style="padding:2px 0">${s.instruction} <span style="color:#64748b">(${_fmtDist(s.distance)})</span></li>`).join('') +
+    '</ol>';
+  log(`itineraire: ${_fmtDist(route.distance)}, ${_fmtDur(route.duration)}, ${route.steps.length} etapes`, 'ok');
+  metric('route distance', _fmtDist(route.distance));
+  metric('route duree', _fmtDur(route.duration));
+}
+
+function clearRoute(){
+  if(map.getLayer('route-line')) map.removeLayer('route-line');
+  if(map.getLayer('route-casing')) map.removeLayer('route-casing');
+  if(map.getSource('route')) map.removeSource('route');
+  if(_destMarker){ _destMarker.remove(); _destMarker = null; }
+  _markers.forEach(m => m.remove()); _markers = [];
+  _origin = null; _destination = null;
+  if(_navWatchId !== null){ navigator.geolocation.clearWatch(_navWatchId); _navWatchId = null; }
+  $('routeSummary').innerHTML = ''; $('routeSteps').innerHTML = '';
+  log('itineraire efface', 'ok');
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Agents en direct (via gateway /api/gps/api/v1/positions)
+// ──────────────────────────────────────────────────────────────────────────
+let _showAgents = false;
+let _agentMarkers = [];
+let _agentTimer = null;
+
+async function loadAgents(){
+  try {
+    const { res, text } = await timedFetch('agents', `${gps()}/api/v1/positions?minutes=30`);
+    if(!res.ok){ log('agents: '+text, 'err'); return; }
+    const data = JSON.parse(text);
+    _agentMarkers.forEach(m => m.remove());
+    _agentMarkers = [];
+    if(_showAgents){
+      data.agents.forEach(a => {
+        const el = document.createElement('div');
+        el.style.cssText = 'background:#16a34a;color:#fff;font-size:10px;padding:3px 6px;border-radius:10px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5);white-space:nowrap';
+        el.textContent = '👤 ' + a.agent_id;
+        _agentMarkers.push(new maplibregl.Marker(el).setLngLat([a.lon, a.lat])
+          .setPopup(new maplibregl.Popup().setText(`${a.agent_id} — ${new Date(a.timestamp).toLocaleTimeString()}`))
+          .addTo(map));
+      });
+    }
+    $('agentsBtn').textContent = `👥 Agents (${data.count})`;
+    $('agentsList').innerHTML = data.agents.map(a =>
+      `<div class="metric"><span>${a.agent_id}</span><b>${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}</b></div>`).join('');
+  } catch(e){ log('agents err: '+e, 'err'); }
+}
+
+function toggleAgents(){
+  _showAgents = !_showAgents;
+  $('agentsBtn').style.background = _showAgents ? '#16a34a' : '#2563eb';
+  if(_showAgents){
+    loadAgents();
+    _agentTimer = setInterval(loadAgents, 5000);
+    log('suivi agents active (refresh 5s)', 'ok');
+  } else {
+    if(_agentTimer){ clearInterval(_agentTimer); _agentTimer = null; }
+    _agentMarkers.forEach(m => m.remove()); _agentMarkers = [];
+    $('agentsList').innerHTML = '';
+    $('agentsBtn').textContent = '👥 Agents (0)';
+    log('suivi agents desactive', 'ok');
+  }
 }
 
 // Phase 4 — auto-refresh: poll the manifest; when map version grows, pull the
