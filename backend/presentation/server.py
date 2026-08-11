@@ -14,6 +14,11 @@ Sert :
   POST /api/captures         -> crée une capture {lat,lon,kind,label,signals}
   POST /api/captures/<id>/sync -> fait progresser la capture vers le serveur
 
+  # Itinéraire guidé + suivi agents (proxies vers gateway Go 8080 / routing 8093)
+  POST /api/routing/navigate -> itinéraire position->destination (steps FR + GeoJSON)
+  POST /api/position         -> remonte la position live d'un agent (vers gps-collect)
+  GET  /api/agents           -> dernières positions connues des agents
+
 Choix : bibliothèque standard `http.server` -> démarrage instantané, aucune
 installation pip (ne perturbe pas l'entraînement ADAN en cours). Le découpage
 DDD reste intact ; ce fichier n'est qu'un adaptateur HTTP fin.
@@ -26,6 +31,44 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+from urllib.request import Request as _UrlRequest, urlopen as _urlopen
+from urllib.error import URLError as _URLError
+
+# Upstreams internes (même hôte). Le gateway Go (8080) proxifie vers
+# gps-collect (8095) et routing (8093). Configurable par variables d'env.
+_GATEWAY_URL = os.environ.get("MAPNET_GATEWAY_URL", "http://127.0.0.1:8080")
+_ROUTING_NAVIGATE = os.environ.get(
+    "MAPNET_ROUTING_NAVIGATE_URL", f"{_GATEWAY_URL}/api/route/api/v1/routing/navigate"
+)
+_GPS_POSITION = os.environ.get(
+    "MAPNET_GPS_POSITION_URL", f"{_GATEWAY_URL}/api/gps/api/v1/collecte/position"
+)
+_GPS_POSITIONS = os.environ.get(
+    "MAPNET_GPS_POSITIONS_URL", f"{_GATEWAY_URL}/api/gps/api/v1/positions"
+)
+
+
+def _proxy_post(url: str, payload: dict, timeout: float = 30.0):
+    """POST JSON vers un upstream interne, retourne (code, objet_json)."""
+    body = json.dumps(payload).encode("utf-8")
+    req = _UrlRequest(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with _urlopen(req, timeout=timeout) as resp:
+            return resp.getcode(), json.loads(resp.read().decode("utf-8") or "{}")
+    except _URLError as e:
+        return 502, {"error": "upstream_unavailable", "detail": str(e), "upstream": url}
+    except Exception as e:  # noqa: BLE001
+        return 502, {"error": "upstream_error", "detail": str(e)}
+
+
+def _proxy_get(url: str, timeout: float = 15.0):
+    try:
+        with _urlopen(url, timeout=timeout) as resp:
+            return resp.getcode(), json.loads(resp.read().decode("utf-8") or "{}")
+    except _URLError as e:
+        return 502, {"error": "upstream_unavailable", "detail": str(e), "upstream": url}
+    except Exception as e:  # noqa: BLE001
+        return 502, {"error": "upstream_error", "detail": str(e)}
 
 # --- bootstrap import path (permet `python backend/presentation/server.py`) --
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +140,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(CONTAINER.plugins.snapshot())
             if path == "/api/events":
                 return self._json(CONTAINER.bus.recent(30))
+            if path == "/api/agents":
+                # Dernières positions connues des agents (via gps-collect/gateway)
+                minutes = urlparse(self.path).query
+                qs = ""
+                for kv in minutes.split("&"):
+                    if kv.startswith("minutes="):
+                        qs = "?" + kv
+                code, obj = _proxy_get(_GPS_POSITIONS + qs)
+                return self._json(obj, code)
             return self._json({"error": "not_found", "path": path}, 404)
         except Exception as e:  # pragma: no cover
             return self._json({"error": str(e)}, 500)
@@ -133,6 +185,19 @@ class Handler(BaseHTTPRequestHandler):
                 if cap is None:
                     return self._json({"error": "capture_not_found"}, 404)
                 return self._json(cap.to_dict())
+            if path == "/api/routing/navigate":
+                # Itinéraire guidé position -> destination (proxy routing 8093).
+                code, obj = _proxy_post(_ROUTING_NAVIGATE, {
+                    "from_lat": float(data.get("from_lat", 0.0)),
+                    "from_lon": float(data.get("from_lon", 0.0)),
+                    "to_lat": float(data.get("to_lat", 0.0)),
+                    "to_lon": float(data.get("to_lon", 0.0)),
+                })
+                return self._json(obj, code)
+            if path == "/api/position":
+                # Position live d'un agent de terrain (proxy gps-collect 8095).
+                code, obj = _proxy_post(_GPS_POSITION, data)
+                return self._json(obj, code)
             return self._json({"error": "not_found", "path": path}, 404)
         except Exception as e:  # pragma: no cover
             return self._json({"error": str(e)}, 400)
