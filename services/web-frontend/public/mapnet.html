@@ -53,7 +53,8 @@
 
     <h2>Itinéraire (position → destination)</h2>
     <div class="row">
-      <button onclick="useMyPosition()">📍 Ma position</button>
+      <button onclick="useMyPosition()">📍 Ma position (GPS)</button>
+      <button onclick="armOrigin()">📌 Position par clic</button>
       <button onclick="armDestination()">🎯 Poser destination</button>
     </div>
     <div class="row">
@@ -170,33 +171,53 @@ const rte = () => '/api/route';
 let _origin = null;          // {lat, lon}
 let _destination = null;     // {lat, lon}
 let _armDest = false;        // prochain clic carte = destination
+let _armOrigin = false;      // prochain clic carte = origine (fallback HTTP sans HTTPS)
 let _markers = [];
 let _destMarker = null;
+let _originMarker = null;
 let _navWatchId = null;
 
 function _fmtDist(m){ return m >= 1000 ? (m/1000).toFixed(1)+' km' : Math.round(m)+' m'; }
 function _fmtDur(s){ const min = Math.round(s/60); return min >= 60 ? Math.floor(min/60)+' h '+(min%60)+' min' : min+' min'; }
 
+function _setOrigin(lat, lon, source){
+  _origin = { lat, lon };
+  log(`position acquise (${source}): ${lat.toFixed(5)}, ${lon.toFixed(5)}`, 'ok');
+  if(_originMarker) _originMarker.remove();
+  const el = document.createElement('div');
+  el.style.cssText = 'width:16px;height:16px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 8px #2563eb';
+  _originMarker = new maplibregl.Marker(el).setLngLat([lon, lat]).addTo(map);
+  map.flyTo({ center: [lon, lat], zoom: 15 });
+  if(_destination) computeRoute();
+}
+
 function useMyPosition(){
-  if(!navigator.geolocation){ log('geolocalisation non supportee','err'); return; }
-  navigator.geolocation.getCurrentPosition(pos => {
-    _origin = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-    log(`position acquise: ${_origin.lat.toFixed(5)}, ${_origin.lon.toFixed(5)}`, 'ok');
-    const el = document.createElement('div');
-    el.style.cssText = 'width:16px;height:16px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 8px #2563eb';
-    _markers.push(new maplibregl.Marker(el).setLngLat([_origin.lon, _origin.lat]).addTo(map));
-    map.flyTo({ center: [_origin.lon, _origin.lat], zoom: 15 });
-    if(_destination) computeRoute();
-  }, err => log('geoloc erreur: '+err.message, 'err'), { enableHighAccuracy: true, timeout: 8000 });
+  if(!navigator.geolocation){ log('geolocalisation non supportee — utilisez "Position par clic"','err'); return; }
+  navigator.geolocation.getCurrentPosition(
+    pos => _setOrigin(pos.coords.latitude, pos.coords.longitude, 'GPS'),
+    err => log('geoloc bloquee ('+err.message+') — page en HTTP simple. Utilisez "Position par clic".', 'err'),
+    { enableHighAccuracy: true, timeout: 8000 });
+}
+
+function armOrigin(){
+  _armOrigin = true; _armDest = false;
+  log('cliquez sur la carte pour poser VOTRE position', 'ok');
+  map.getCanvas().style.cursor = 'crosshair';
 }
 
 function armDestination(){
-  _armDest = true;
+  _armDest = true; _armOrigin = false;
   log('cliquez sur la carte pour poser la destination', 'ok');
   map.getCanvas().style.cursor = 'crosshair';
 }
 
 map.on('click', e => {
+  if(_armOrigin){
+    _armOrigin = false;
+    map.getCanvas().style.cursor = '';
+    _setOrigin(e.lngLat.lat, e.lngLat.lng, 'clic carte');
+    return;
+  }
   if(!_armDest) return;
   _armDest = false;
   map.getCanvas().style.cursor = '';
@@ -205,7 +226,7 @@ map.on('click', e => {
   _destMarker = new maplibregl.Marker({ color: '#ef4444' }).setLngLat([_destination.lon, _destination.lat]).addTo(map);
   log(`destination posee: ${_destination.lat.toFixed(5)}, ${_destination.lon.toFixed(5)}`, 'ok');
   if(_origin) computeRoute();
-  else log('position inconnue — cliquez "Ma position" d\'abord', 'err');
+  else log('position inconnue — cliquez "Ma position (GPS)" ou "Position par clic" d\'abord', 'err');
 });
 
 async function computeRoute(){
@@ -252,8 +273,9 @@ function clearRoute(){
   if(map.getLayer('route-casing')) map.removeLayer('route-casing');
   if(map.getSource('route')) map.removeSource('route');
   if(_destMarker){ _destMarker.remove(); _destMarker = null; }
+  if(_originMarker){ _originMarker.remove(); _originMarker = null; }
   _markers.forEach(m => m.remove()); _markers = [];
-  _origin = null; _destination = null;
+  _origin = null; _destination = null; _armOrigin = false; _armDest = false;
   if(_navWatchId !== null){ navigator.geolocation.clearWatch(_navWatchId); _navWatchId = null; }
   $('routeSummary').innerHTML = ''; $('routeSteps').innerHTML = '';
   log('itineraire efface', 'ok');
