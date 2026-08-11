@@ -12,6 +12,7 @@
 //	/assets/*       -> static assets
 //	/api/gps/*      -> gps-collect   (GPX ingestion)
 //	/api/map/*      -> map-engine    (edges + versioned sync)
+//	/api/route/*    -> routing       (itineraries: route, nearest, map-match)
 //	/health         -> gateway liveness
 package main
 
@@ -69,6 +70,7 @@ func main() {
 	staticDir := env("STATIC_DIR", "/home/user/webapp/services/web-frontend/public")
 	gpsTarget := env("GPS_COLLECT_URL", "http://localhost:8081")
 	mapTarget := env("MAP_ENGINE_URL", "http://localhost:8082")
+	routeTarget := env("ROUTING_URL", "http://localhost:8093")
 
 	gpsProxy, err := newProxy(gpsTarget, "/api/gps")
 	if err != nil {
@@ -78,10 +80,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("map proxy: %v", err)
 	}
+	routeProxy, err := newProxy(routeTarget, "/api/route")
+	if err != nil {
+		log.Fatalf("route proxy: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/gps/", gpsProxy)
 	mux.Handle("/api/map/", mapProxy)
+	mux.Handle("/api/route/", routeProxy)
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -103,7 +110,7 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("gateway listening on :%s (gps=%s map=%s static=%s)", port, gpsTarget, mapTarget, staticDir)
+	log.Printf("gateway listening on :%s (gps=%s map=%s route=%s static=%s)", port, gpsTarget, mapTarget, routeTarget, staticDir)
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("listen: %v", err)
