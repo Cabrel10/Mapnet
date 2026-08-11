@@ -26,3 +26,8 @@ mobile/android/local.properties
 mapnet_server.log
 __pycache__/
 *.pyc
+# APK distribution artifacts (binaires lourds, servis par HTTP)
+apk_dist/
+# Données runtime du backend (snapshots / caches générés)
+backend/data/captures_snapshot.json
+backend/data/nominatim_cache.json

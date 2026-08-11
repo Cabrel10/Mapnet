@@ -54,7 +54,10 @@ def map_match(points: List[Dict[str, Any]]) -> Dict[str, Any]:
 def route(from_lat: float, from_lon: float, to_lat: float, to_lon: float) -> Dict[str, Any]:
     """Calculate a route from origin to destination."""
     base = _pick_base_url()
-    url = f"{base}/route/v1/foot/{from_lon},{from_lat};{to_lon},{to_lat}?overview=full&geometries=geojson"
+    url = (
+        f"{base}/route/v1/foot/{from_lon},{from_lat};{to_lon},{to_lat}"
+        "?overview=full&geometries=geojson&steps=true&annotations=true"
+    )
     with httpx.Client(timeout=30.0) as client:
         r = client.get(url)
         r.raise_for_status()

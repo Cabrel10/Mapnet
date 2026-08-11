@@ -23,6 +23,7 @@ import 'database/local_store.dart';
 import 'models/capture.dart';
 import 'services/geo_utils.dart';
 import 'services/gps_service.dart';
+import 'services/routing_service.dart';
 import 'services/sensor_service.dart';
 import 'services/sync_service.dart';
 
@@ -84,6 +85,14 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
   StreamSubscription<Position>? _posSub;
   StreamSubscription<SensorSnapshot>? _sensorSub;
 
+  // --- Itinéraire guidé (position -> destination) ---
+  NavRoute? _route;            // itinéraire courant calculé par le serveur
+  LatLng? _navDestination;     // destination choisie (appui long sur la carte)
+  bool _navigating = false;    // navigation active (suivi + remontée position)
+  bool _routeLoading = false;  // calcul en cours
+  int _stepIndex = 0;          // étape courante pour le guidage
+  String get _agentId => 'agent_${DateTime.now().millisecondsSinceEpoch ~/ 100000}';
+
   @override
   void initState() {
     super.initState();
@@ -142,6 +151,7 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
         accuracyM: p.accuracy,
         sensors: _sensors.toJson(),
       );
+      _onNavPosition(p); // guidage: avancement étape + remontée position
       if (_followMe) {
         _mapController.move(ll, _mapController.camera.zoom);
       }
@@ -241,6 +251,110 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
     _mapController.move(_myPos!, 16);
   }
 
+  // ────────────────────────────────────────────────────────────────────────
+  // NAVIGATION GUIDÉE — appui long pose la destination, calcul via serveur,
+  // polyline + étapes + suivi GPS (remontée position, avancement d'étape,
+  // recalcul si déviation > 60 m).
+  // ────────────────────────────────────────────────────────────────────────
+
+  Future<void> _setDestination(LatLng dest) async {
+    if (_myPos == null) {
+      _toast('Position GPS requise pour un itinéraire', const Color(0xFFEF4444));
+      return;
+    }
+    setState(() {
+      _navDestination = dest;
+      _routeLoading = true;
+      _route = null;
+      _stepIndex = 0;
+    });
+    try {
+      final route = await RoutingService.instance.navigate(from: _myPos!, to: dest);
+      if (!mounted) return;
+      setState(() {
+        _route = route;
+        _routeLoading = false;
+      });
+      _toast('Itinéraire: ${route.distanceLabel} — ${route.durationLabel}',
+          const Color(0xFF00E5A0));
+      // Cadre la carte sur l'itinéraire complet.
+      if (route.points.isNotEmpty) {
+        _mapController.fitCamera(CameraFit.bounds(
+          bounds: LatLngBounds.fromPoints(route.points),
+          padding: const EdgeInsets.all(60),
+        ));
+      }
+    } on RoutingException catch (e) {
+      if (!mounted) return;
+      setState(() => _routeLoading = false);
+      _toast('Itinéraire impossible: ${e.message}', const Color(0xFFEF4444));
+    }
+  }
+
+  void _clearRoute() {
+    setState(() {
+      _route = null;
+      _navDestination = null;
+      _navigating = false;
+      _stepIndex = 0;
+    });
+    _toast('Itinéraire effacé', const Color(0xFFF57C00));
+  }
+
+  void _toggleNavigation() {
+    if (_route == null) return;
+    setState(() {
+      _navigating = !_navigating;
+      _stepIndex = 0;
+      _followMe = _navigating;
+    });
+    if (_navigating) {
+      _toast('Navigation démarrée', const Color(0xFF00E5A0));
+    }
+  }
+
+  /// Appelé à chaque fix GPS pendant la navigation : avancement d'étape,
+  /// remontée position serveur, recalcul si déviation de trace.
+  void _onNavPosition(Position p) {
+    final route = _route;
+    if (!_navigating || route == null || route.steps.isEmpty) return;
+
+    // Remontée live de la position (best-effort).
+    RoutingService.instance.reportPosition(
+      agentId: _agentId,
+      pos: LatLng(p.latitude, p.longitude),
+      accuracyM: p.accuracy,
+      speedKmh: p.speed.isFinite ? p.speed * 3.6 : null,
+      bearing: p.heading.isFinite ? p.heading : null,
+    );
+
+    // Avancement d'étape : proche (< 40 m) de la manoeuvre courante -> suivante.
+    if (_stepIndex < route.steps.length - 1) {
+      final stepLoc = route.steps[_stepIndex].location;
+      final d = const Distance().as(LengthUnit.Meter, stepLoc, LatLng(p.latitude, p.longitude));
+      if (d < 40) {
+        setState(() => _stepIndex++);
+        final next = route.steps[_stepIndex];
+        _toast(next.instruction, const Color(0xFF38BDF8));
+      }
+    }
+
+    // Déviation de trace : si > 60 m du point le plus proche, recalcul.
+    if (route.points.isNotEmpty) {
+      final me = LatLng(p.latitude, p.longitude);
+      double minD = double.infinity;
+      const dist = Distance();
+      for (final pt in route.points) {
+        final d = dist.as(LengthUnit.Meter, pt, me);
+        if (d < minD) minD = d;
+        if (minD < 20) break; // assez proche, inutile de continuer
+      }
+      if (minD > 60 && _navDestination != null && !_routeLoading) {
+        _setDestination(_navDestination!); // recalcule depuis la position actuelle
+      }
+    }
+  }
+
   void _toast(String msg, Color color) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -275,6 +389,8 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                   setState(() => _followMe = false);
                 }
               },
+              // Appui long sur la carte = poser la destination de l'itinéraire.
+              onLongPress: (tapPos, latLng) => _setDestination(latLng),
             ),
             children: [
               TileLayer(
@@ -282,6 +398,21 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                 userAgentPackageName: 'com.cabrel10.mapnet_mobile',
                 tileProvider: NetworkTileProvider(),
               ),
+
+              // Polyline de l'itinéraire (dessinée sous les marqueurs).
+              if (_route != null && _route!.points.isNotEmpty)
+                PolylineLayer(polylines: [
+                  Polyline(
+                    points: _route!.points,
+                    strokeWidth: 6,
+                    color: const Color(0xFF0A0E14).withOpacity(0.7),
+                  ),
+                  Polyline(
+                    points: _route!.points,
+                    strokeWidth: 4,
+                    color: const Color(0xFF2196F3),
+                  ),
+                ]),
 
               // Cercle d'incertitude autour de MA position (précision réelle).
               if (_myPos != null && _accuracyM > 0)
@@ -325,11 +456,26 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                     child: _MeDot(),
                   ),
                 ]),
+
+              // Marqueur DESTINATION (drapeau rouge, posé par appui long).
+              if (_navDestination != null)
+                MarkerLayer(markers: [
+                  Marker(
+                    point: _navDestination!,
+                    width: 40,
+                    height: 40,
+                    child: const Icon(Icons.flag,
+                        color: Color(0xFFEF4444), size: 34,
+                        shadows: [Shadow(color: Colors.black, blurRadius: 4)]),
+                  ),
+                ]),
             ],
           ),
 
           _buildHud(),
           _buildSyncBadge(),
+          if (_route != null || _routeLoading) _buildNavPanel(),
+          if (_route != null) _buildNavButtons(),
           if (_myPos != null) _buildNearbyButton(),
           if (!_followMe && _myPos != null) _buildRecenterButton(),
         ],
@@ -410,6 +556,114 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
             style: TextStyle(
                 color: color, fontSize: 12, fontWeight: FontWeight.bold)),
       ],
+    );
+  }
+
+  /// Panneau de guidage (haut, sous le HUD) : étape courante + progression.
+  Widget _buildNavPanel() {
+    final route = _route;
+    return Positioned(
+      top: 96,
+      left: 12,
+      right: 12,
+      child: SafeArea(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0A0E14).withOpacity(0.94),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF2196F3), width: 1.2),
+          ),
+          child: _routeLoading
+              ? const Row(children: [
+                  SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Color(0xFF2196F3))),
+                  SizedBox(width: 12),
+                  Text('Calcul de l\'itinéraire…',
+                      style: TextStyle(color: Colors.white, fontSize: 13)),
+                ])
+              : route == null
+                  ? const SizedBox.shrink()
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(children: [
+                          Icon(
+                              _navigating
+                                  ? Icons.navigation
+                                  : Icons.route,
+                              color: const Color(0xFF2196F3),
+                              size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _navigating &&
+                                      route.steps.isNotEmpty &&
+                                      _stepIndex < route.steps.length
+                                  ? route.steps[_stepIndex].instruction
+                                  : 'Itinéraire prêt — ${route.distanceLabel}',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 6),
+                        Row(children: [
+                          Text(
+                            '${route.distanceLabel}  ·  ${route.durationLabel}',
+                            style: const TextStyle(
+                                color: Color(0xFF9FB0C3), fontSize: 12),
+                          ),
+                          if (_navigating && route.steps.isNotEmpty) ...[
+                            const Spacer(),
+                            Text(
+                              'étape ${_stepIndex + 1}/${route.steps.length}',
+                              style: const TextStyle(
+                                  color: Color(0xFF2196F3), fontSize: 12),
+                            ),
+                          ],
+                        ]),
+                      ],
+                    ),
+        ),
+      ),
+    );
+  }
+
+  /// Boutons de contrôle navigation (droite) : démarrer/arrêter + effacer.
+  Widget _buildNavButtons() {
+    return Positioned(
+      right: 16,
+      bottom: 330,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'navtoggle',
+            backgroundColor: _navigating
+                ? const Color(0xFFEF4444)
+                : const Color(0xFF00E5A0),
+            onPressed: _toggleNavigation,
+            child: Icon(
+              _navigating ? Icons.stop : Icons.navigation,
+              color: Colors.black,
+            ),
+          ),
+          const SizedBox(height: 10),
+          FloatingActionButton.small(
+            heroTag: 'navclear',
+            backgroundColor: const Color(0xFF1F2A38),
+            onPressed: _clearRoute,
+            child: const Icon(Icons.close, color: Color(0xFFF57C00)),
+          ),
+        ],
+      ),
     );
   }
 
