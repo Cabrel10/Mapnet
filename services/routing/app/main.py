@@ -6,7 +6,7 @@ from typing import List
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
 
-from .osrm_client import map_match, route, nearest
+from .osrm_client import map_match, route, nearest, route_alternatives, annotate_route_surfaces
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -184,3 +184,61 @@ def navigate(req: RouteRequest):
             "steps": steps,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Multi-itinerary endpoint: up to 4 routes per destination.
+#
+# Each itinerary is annotated with secondary / unpaved (non bitumé) /
+# construction segment distances so the client can badge them and let the
+# user pick (fastest paved vs scenic secondary vs avoiding chantiers).
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/v1/routing/alternatives")
+def alternatives(req: RouteRequest, count: int = 4):
+    """Return up to `count` (default 4) itineraries with surface badges.
+
+    Response shape:
+    {
+      "status": "ok",
+      "count": int,
+      "routes": [
+        {
+          "rank": int,
+          "distance": float, "duration": float,
+          "geometry": GeoJSON LineString,
+          "badges": {
+            "secondary_m": float, "unpaved_m": float, "construction_m": float,
+            "has_unpaved": bool, "has_construction": bool
+          }
+        }, ...
+      ]
+    }
+    """
+    n = max(1, min(int(count), 4))
+    try:
+        data = route_alternatives(
+            req.from_lat, req.from_lon, req.to_lat, req.to_lon, count=n
+        )
+    except Exception as exc:
+        logger.error("Alternatives routing failed: %s", exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    routes = data.get("routes", [])
+    if not routes:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Aucun itinéraire trouvé")
+
+    # Sort by duration ascending so rank 1 = fastest.
+    routes = sorted(routes, key=lambda r: r.get("duration", 0.0))[:n]
+    out = []
+    for i, r in enumerate(routes, start=1):
+        out.append({
+            "rank": i,
+            "distance": r.get("distance", 0.0),
+            "duration": r.get("duration", 0.0),
+            "geometry": r.get("geometry", {}),
+            "badges": annotate_route_surfaces(r),
+        })
+
+    return {"status": "ok", "count": len(out), "routes": out}
