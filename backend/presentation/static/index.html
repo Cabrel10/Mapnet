@@ -244,22 +244,42 @@ document.getElementById('q-go').onclick=()=>search(document.getElementById('q').
 document.getElementById('q-clear').onclick=()=>{document.getElementById('q').value='';document.getElementById('results').classList.remove('on');};
 document.getElementById('neighborhood-filter').onchange=e=>{neighborhoodFilter=e.target.value;loadMap();};
 
-/* ---------- Itinéraire (OSRM) depuis ma position ---------- */
+/* ---------- Itinéraire (routing LOCAL 8093, alternatives + badges) ---------- */
+let routeLayers=[];
+const ROUTE_COLORS=['#1a73e8','#34a853','#fbbc04','#9c27b0'];
+function clearRoutes(){routeLayers.forEach(l=>map.removeLayer(l));routeLayers=[];if(routeLine){map.removeLayer(routeLine);routeLine=null;}}
+function badgeHtml(b){
+  let s='';
+  if(b.has_unpaved)s+='<span style="background:#fbbc04;color:#000;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">piste non bitumée</span>';
+  if(b.has_construction)s+='<span style="background:#ea4335;color:#fff;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">chantier</span>';
+  if(b.secondary_m>0)s+='<span style="background:#5f6368;color:#fff;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">secondaire '+(b.secondary_m/1000).toFixed(1)+' km</span>';
+  if(!s)s='<span style="background:#34a853;color:#fff;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">voie praticable</span>';
+  return s;
+}
 async function routeTo(lat,lon){
-  if(!meMarker){toast('Activez d\'abord votre position 📍');return;}
+  if(!meMarker){toast("Activez d'abord votre position");return;}
   const from=meMarker.getLatLng();
-  toast('Calcul de l\'itinéraire…');
+  toast('Calcul des itinéraires…');
   try{
-    const url=`https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${lon},${lat}?overview=full&geometries=geojson`;
-    const r=await (await fetch(url)).json();
+    const r=await (await fetch('/api/routing/alternatives',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({from_lat:from.lat,from_lon:from.lng,to_lat:lat,to_lon:lon,count:4})})).json();
     if(!r.routes||!r.routes.length){toast('Aucun itinéraire');return;}
-    const rt=r.routes[0];
-    if(routeLine)map.removeLayer(routeLine);
-    routeLine=L.geoJSON(rt.geometry,{style:{color:'#1a73e8',weight:6,opacity:.85}}).addTo(map);
-    map.fitBounds(routeLine.getBounds(),{padding:[60,60]});
-    const km=(rt.distance/1000).toFixed(1),min=Math.round(rt.duration/60);
+    clearRoutes();
     const ri=document.getElementById('route-info');
-    ri.textContent=`🚗 ${km} km · ${min} min`;ri.classList.add('on');
+    ri.innerHTML='';
+    r.routes.forEach((rt,idx)=>{
+      const color=ROUTE_COLORS[idx%ROUTE_COLORS.length];
+      const layer=L.geoJSON(rt.geometry,{style:{color:color,weight:idx===0?6:4,opacity:idx===0?.9:.55}}).addTo(map);
+      routeLayers.push(layer);
+      const km=(rt.distance/1000).toFixed(1),min=Math.round(rt.duration/60);
+      const div=document.createElement('div');
+      div.style.cssText='padding:4px 2px;cursor:pointer;';
+      div.innerHTML='<b style="color:'+color+'">●</b> 🚗 '+km+' km · '+min+' min '+badgeHtml(rt.badges||{});
+      div.onclick=()=>{routeLayers.forEach((l,k)=>l.setStyle({weight:k===idx?6:4,opacity:k===idx?.9:.55}));map.fitBounds(layer.getBounds(),{padding:[60,60]});};
+      ri.appendChild(div);
+    });
+    map.fitBounds(routeLayers[0].getBounds(),{padding:[60,60]});
+    ri.classList.add('on');
   }catch(e){toast('Routage indisponible');}
 }
 document.getElementById('sh-route').onclick=()=>{if(selected)routeTo(selected.lat,selected.lon);};

@@ -40,6 +40,11 @@ _GATEWAY_URL = os.environ.get("MAPNET_GATEWAY_URL", "http://127.0.0.1:8080")
 _ROUTING_NAVIGATE = os.environ.get(
     "MAPNET_ROUTING_NAVIGATE_URL", f"{_GATEWAY_URL}/api/route/api/v1/routing/navigate"
 )
+_ROUTING_ALTERNATIVES = os.environ.get(
+    "MAPNET_ROUTING_ALTERNATIVES_URL",
+    os.environ.get("MAPNET_ROUTING_URL", "http://127.0.0.1:8093")
+    + "/api/v1/routing/alternatives",
+)
 _GPS_POSITION = os.environ.get(
     "MAPNET_GPS_POSITION_URL", f"{_GATEWAY_URL}/api/gps/api/v1/collecte/position"
 )
@@ -192,6 +197,16 @@ class Handler(BaseHTTPRequestHandler):
                     "from_lon": float(data.get("from_lon", 0.0)),
                     "to_lat": float(data.get("to_lat", 0.0)),
                     "to_lon": float(data.get("to_lon", 0.0)),
+                })
+                return self._json(obj, code)
+            if path == "/api/routing/alternatives":
+                # Itinéraires alternatifs avec badges surface (proxy direct 8093).
+                code, obj = _proxy_post(_ROUTING_ALTERNATIVES, {
+                    "from_lat": float(data.get("from_lat", 0.0)),
+                    "from_lon": float(data.get("from_lon", 0.0)),
+                    "to_lat": float(data.get("to_lat", 0.0)),
+                    "to_lon": float(data.get("to_lon", 0.0)),
+                    "count": int(data.get("count", 4)),
                 })
                 return self._json(obj, code)
             if path == "/api/position":
