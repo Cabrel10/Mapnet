@@ -162,26 +162,41 @@ def annotate_route_surfaces(route_obj: Dict[str, Any]) -> Dict[str, Any]:
     secondary_m = 0.0
     unpaved_m = 0.0
     construction_m = 0.0
+    # Au Cameroun, les axes majeurs ont des refs P (provincial) et N (national)
+    # en plus de A (autoroute). On les EXCLUT du classement "secondaire" :
+    # P11/P1/N1 ne sont PAS des ruelles. Seule une classe highway explicite
+    # (track/path/service/residential) OU une surface non bitumée doit baisser
+    # la praticabilité ; à défaut de donnée on ne déclare PAS "secondaire".
+    _MAJOR_REF_PREFIXES = ("A", "N", "P", "D", "R")
+    total_m = 0.0
+    known_surface_m = 0.0
     for leg in route_obj.get("legs", []):
         for step in leg.get("steps", []):
             dist = float(step.get("distance", 0.0) or 0.0)
-            ref = str(step.get("ref", "") or "")
-            road_class = str((step.get("maneuver", {}) or {}).get("type", "") or "")
-            # OSRM steps carry 'name' and sometimes 'ref'; class/surface come
-            # from the 'annotations' or step metadata when available.
+            total_m += dist
+            ref = str(step.get("ref", "") or "").strip().upper()
             name = str(step.get("name", "") or "").lower()
             surface = str(step.get("surface", "") or "").lower()
             highway = str(step.get("highway", "") or "").lower()
-            if highway in _SECONDARY_CLASSES or ref and not ref.upper().startswith(("A", "N")):
+            if surface:
+                known_surface_m += dist
+            is_major = bool(ref) and ref.startswith(_MAJOR_REF_PREFIXES)
+            # secondaire = petite voie UNIQUEMENT si pas un axe majeur
+            if highway in _SECONDARY_CLASSES and not is_major:
                 secondary_m += dist
+            # non bitumé = surface explicitement non revêtue (jamais deviné)
             if surface in _UNPAVED_SURFACES or "unpaved" in name:
                 unpaved_m += dist
             if "construction" in name or "chantier" in name or highway == "construction":
                 construction_m += dist
+    # Honnêteté des données : on ne déclare "praticable" que si on a une info
+    # surface réelle ; sinon surface_inconnue (évite le faux "voie praticable").
     return {
         "secondary_m": round(secondary_m, 1),
         "unpaved_m": round(unpaved_m, 1),
         "construction_m": round(construction_m, 1),
         "has_unpaved": unpaved_m > 0,
         "has_construction": construction_m > 0,
+        "total_m": round(total_m, 1),
+        "surface_known": known_surface_m > 0,
     }

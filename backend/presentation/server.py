@@ -30,7 +30,7 @@ import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 from urllib.request import Request as _UrlRequest, urlopen as _urlopen
 from urllib.error import URLError as _URLError
 
@@ -51,6 +51,40 @@ _GPS_POSITION = os.environ.get(
 _GPS_POSITIONS = os.environ.get(
     "MAPNET_GPS_POSITIONS_URL", f"{_GATEWAY_URL}/api/gps/api/v1/positions"
 )
+_NOMINATIM = os.environ.get(
+    "MAPNET_NOMINATIM_URL", "https://nominatim.openstreetmap.org/search"
+)
+
+
+def _geocode(name: str, timeout: float = 15.0):
+    """Géocode un nom de lieu via Nominatim -> (lat, lon, display_name) ou None.
+
+    Biais Cameroun (viewbox Yaoundé élargi) + countrycodes=cm pour rester local.
+    """
+    name = (name or "").strip()
+    if not name:
+        return None
+    qs = urlencode({
+        "q": name, "format": "json", "limit": 1,
+        "countrycodes": "cm", "addressdetails": 0,
+    })
+    req = _UrlRequest(
+        f"{_NOMINATIM}?{qs}",
+        headers={"User-Agent": "MapNet/1.0 (routing by place name)"},
+        method="GET",
+    )
+    try:
+        with _urlopen(req, timeout=timeout) as resp:
+            arr = json.loads(resp.read().decode("utf-8") or "[]")
+    except Exception:
+        return None
+    if not arr:
+        return None
+    hit = arr[0]
+    try:
+        return float(hit["lat"]), float(hit["lon"]), str(hit.get("display_name", name))
+    except Exception:
+        return None
 
 
 def _proxy_post(url: str, payload: dict, timeout: float = 30.0):
@@ -209,6 +243,34 @@ class Handler(BaseHTTPRequestHandler):
                     "count": int(data.get("count", 4)),
                 })
                 return self._json(obj, code)
+            if path == "/api/routing/by_names":
+                # Itinéraires par NOMS de lieux : géocode départ + destination,
+                # puis proxy alternatives 8093 (cardinal + steps + badges inclus).
+                from_name = str(data.get("from_name") or "").strip()
+                to_name = str(data.get("to_name") or "").strip()
+                if not from_name or not to_name:
+                    return self._json(
+                        {"error": "missing_names",
+                         "detail": "from_name et to_name requis"}, 400)
+                src = _geocode(from_name)
+                if src is None:
+                    return self._json(
+                        {"error": "origin_not_found", "name": from_name}, 404)
+                dst = _geocode(to_name)
+                if dst is None:
+                    return self._json(
+                        {"error": "destination_not_found", "name": to_name}, 404)
+                code, obj = _proxy_post(_ROUTING_ALTERNATIVES, {
+                    "from_lat": src[0], "from_lon": src[1],
+                    "to_lat": dst[0], "to_lon": dst[1],
+                    "count": int(data.get("count", 4)),
+                })
+                if isinstance(obj, dict):
+                    obj["resolved"] = {
+                        "from": {"name": src[2], "lat": src[0], "lon": src[1]},
+                        "to": {"name": dst[2], "lat": dst[0], "lon": dst[1]},
+                    }
+                return self._json(obj, code)
             if path == "/api/position":
                 # Position live d'un agent de terrain (proxy gps-collect 8095).
                 code, obj = _proxy_post(_GPS_POSITION, data)
@@ -228,6 +290,9 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     host = os.environ.get("MAPNET_HOST", "0.0.0.0")
     port = int(os.environ.get("MAPNET_PORT", "8080"))
+    # Relance immédiate même si des sockets TIME_WAIT/FIN_WAIT traînent
+    # (crash précédent, SIGKILL wings, etc.).
+    ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), Handler)
     print(f"[MapNet] DDD backend + Leaflet map serving on http://{host}:{port}", flush=True)
     print(f"[MapNet] seeded {len(CONTAINER.repo.list())} captures, "

@@ -98,6 +98,19 @@
 <!-- Bandeau itinéraire -->
 <div class="route-info" id="route-info"></div>
 
+<!-- Itinéraire par noms de lieux : départ -> destination -->
+<div class="route-names" id="route-names" style="position:absolute;left:12px;top:118px;z-index:900;background:rgba(15,23,42,.92);border-radius:12px;padding:10px;width:280px;color:#e2e8f0;font-size:13px;backdrop-filter:blur(6px)">
+  <div style="font-weight:700;margin-bottom:6px">🧭 Itinéraire par noms</div>
+  <input id="rn-from" type="text" placeholder="Départ (ex: Carrefour Nsam)" autocomplete="off"
+         style="width:100%;box-sizing:border-box;margin-bottom:6px;padding:7px 9px;border-radius:8px;border:1px solid #334155;background:#0b1220;color:#e2e8f0" />
+  <input id="rn-to" type="text" placeholder="Destination (ex: Marché Mokolo)" autocomplete="off"
+         style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:7px 9px;border-radius:8px;border:1px solid #334155;background:#0b1220;color:#e2e8f0" />
+  <div style="display:flex;gap:6px">
+    <button id="rn-go" style="flex:1;background:#1a73e8;color:#fff;border:0;border-radius:8px;padding:7px;cursor:pointer;font-weight:600">Calculer</button>
+    <button id="rn-clear" style="background:#334155;color:#fff;border:0;border-radius:8px;padding:7px 10px;cursor:pointer">✕</button>
+  </div>
+</div>
+
 <!-- Barre de stats live -->
 <div class="statbar" id="statbar">
   <span><span class="dot"></span>LIVE</span>
@@ -283,6 +296,69 @@ async function routeTo(lat,lon){
   }catch(e){toast('Routage indisponible');}
 }
 document.getElementById('sh-route').onclick=()=>{if(selected)routeTo(selected.lat,selected.lon);};
+
+/* ---------- Itinéraire par NOMS de lieux (départ -> destination) ---------- */
+function cardinalBadge(rt){
+  return (rt.cardinal&&rt.cardinal.bearing)
+    ?'<span style="background:#0e7490;color:#fff;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">➤ '+rt.cardinal.bearing+'</span>':'';
+}
+function stepsHtml(steps){
+  if(!steps||!steps.length)return'';
+  return '<div style="margin:4px 0 2px 14px;font-size:12px;color:#cbd5e1">'+steps.map(s=>{
+    const rp=(s.maneuver==='roundabout'||s.maneuver==='rotary');
+    const dist=s.distance?' — '+(s.distance/1000).toFixed(1)+' km':'';
+    return '<div style="padding:1px 0;'+(rp?'color:#f59e0b;font-weight:600':'')+'">'+(rp?'⟳':'•')+' '+s.instruction+dist+'</div>';
+  }).join('')+'</div>';
+}
+function renderRouteAlternatives(r){
+  clearRoutes();
+  const ri=document.getElementById('route-info');
+  ri.innerHTML='';
+  if(r.resolved){
+    const head=document.createElement('div');
+    head.style.cssText='padding:2px 2px 6px;font-size:12px;color:#94a3b8';
+    head.textContent='📍 '+r.resolved.from.name.split(',')[0]+' → '+r.resolved.to.name.split(',')[0];
+    ri.appendChild(head);
+  }
+  r.routes.forEach((rt,idx)=>{
+    const color=ROUTE_COLORS[idx%ROUTE_COLORS.length];
+    const layer=L.geoJSON(rt.geometry,{style:{color:color,weight:idx===0?6:4,opacity:idx===0?.9:.55}}).addTo(map);
+    routeLayers.push(layer);
+    const km=(rt.distance/1000).toFixed(1),min=Math.round(rt.duration/60);
+    const div=document.createElement('div');
+    div.style.cssText='padding:4px 2px;cursor:pointer;';
+    div.innerHTML='<b style="color:'+color+'">●</b> 🚗 '+km+' km · '+min+' min '+cardinalBadge(rt)+' '+badgeHtml(rt.badges||{});
+    div.onclick=()=>{
+      routeLayers.forEach((l,k)=>l.setStyle({weight:k===idx?6:4,opacity:k===idx?.9:.55}));
+      map.fitBounds(layer.getBounds(),{padding:[60,60]});
+      ri.querySelectorAll('.rn-steps').forEach(e=>e.remove());
+      const st=document.createElement('div');st.className='rn-steps';st.innerHTML=stepsHtml(rt.steps);
+      div.after(st);
+    };
+    ri.appendChild(div);
+  });
+  map.fitBounds(routeLayers[0].getBounds(),{padding:[60,60]});
+  ri.classList.add('on');
+}
+async function routeByNames(){
+  const fromName=document.getElementById('rn-from').value.trim();
+  const toName=document.getElementById('rn-to').value.trim();
+  if(!fromName||!toName){toast('Saisissez départ ET destination');return;}
+  toast('Géocodage + calcul des itinéraires…');
+  try{
+    const r=await (await fetch('/api/routing/by_names',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({from_name:fromName,to_name:toName,count:4})})).json();
+    if(r.error){toast(r.error==='origin_not_found'?'Départ introuvable':(r.error==='destination_not_found'?'Destination introuvable':'Routage indisponible'));return;}
+    if(!r.routes||!r.routes.length){toast('Aucun itinéraire');return;}
+    renderRouteAlternatives(r);
+    toast('Itinéraires calculés ✓');
+  }catch(e){toast('Routage indisponible');}
+}
+document.getElementById('rn-go').onclick=routeByNames;
+document.getElementById('rn-clear').onclick=()=>{
+  document.getElementById('rn-from').value='';document.getElementById('rn-to').value='';
+  clearRoutes();document.getElementById('route-info').classList.remove('on');
+};
 
 /* ---------- Créer une capture ---------- */
 document.getElementById('btn-add').onclick=()=>{

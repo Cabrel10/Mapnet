@@ -236,9 +236,25 @@ function _badgeHtml(b){
   let s = '';
   if(b.has_unpaved) s += '<span style="background:#f59e0b;color:#000;border-radius:6px;padding:1px 6px;font-size:11px;margin-left:4px">piste non bitumée</span>';
   if(b.has_construction) s += '<span style="background:#ef4444;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px;margin-left:4px">chantier</span>';
-  if(b.secondary_m > 0) s += `<span style="background:#64748b;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px;margin-left:4px">secondaire ${_fmtDist(b.secondary_m)}</span>`;
-  if(!s) s = '<span style="background:#16a34a;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px;margin-left:4px">voie praticable</span>';
+  if(b.secondary_m > 0 && b.total_m > 0){
+    const pct = Math.round(100 * b.secondary_m / b.total_m);
+    s += `<span style="background:#64748b;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px;margin-left:4px">secondaire ${_fmtDist(b.secondary_m)} (${pct}%)</span>`;
+  }
+  if(!s){
+    if(b.surface_known) s = '<span style="background:#16a34a;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px;margin-left:4px">voie praticable</span>';
+    else s = '<span style="background:#475569;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px;margin-left:4px">surface inconnue</span>';
+  }
   return s;
+}
+
+function _stepsHtml(steps){
+  if(!steps || !steps.length) return '<div style="padding:2px 0;font-size:12px;color:#94a3b8">pas de détail étape par étape</div>';
+  return steps.map(s => {
+    const rp = (s.maneuver === 'roundabout' || s.maneuver === 'rotary');
+    const icon = rp ? '&#10227;' : '&bull;';
+    const dist = s.distance ? ` — ${_fmtDist(s.distance)}` : '';
+    return `<div style="padding:2px 0;font-size:12px;${rp ? 'color:#f59e0b;font-weight:600' : ''}">${icon} ${s.instruction}${dist}</div>`;
+  }).join('');
 }
 
 async function computeRoute(){
@@ -279,13 +295,15 @@ function drawAlternatives(routes){
       paint:{ 'line-color':color, 'line-width': idx===0?6:4, 'line-opacity': idx===0?0.95:0.55 } });
     _altRoutes.push(sid);
     rt.geometry.coordinates.forEach(c => b.extend(c));
+    const card = (rt.cardinal && rt.cardinal.bearing)
+      ? `<span style="background:#0e7490;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px;margin-left:4px">&#10148; ${rt.cardinal.bearing}</span>` : '';
     summaryHtml += `<div style="padding:3px 0;cursor:pointer" data-alt="${idx}">` +
-      `<b style="color:${color}">&#9679;</b> ${_fmtDist(rt.distance)} — ${_fmtDur(rt.duration)} ${_badgeHtml(rt.badges||{})}</div>`;
+      `<b style="color:${color}">&#9679;</b> ${_fmtDist(rt.distance)} — ${_fmtDur(rt.duration)}${card} ${_badgeHtml(rt.badges||{})}</div>`;
   });
 
   map.fitBounds(b, { padding: 80 });
   $('routeSummary').innerHTML = summaryHtml;
-  $('routeSteps').innerHTML = '';
+  $('routeSteps').innerHTML = _stepsHtml(routes[0].steps);
   $('routeSummary').querySelectorAll('[data-alt]').forEach(el => {
     el.onclick = () => {
       const sel = +el.dataset.alt;
@@ -294,6 +312,7 @@ function drawAlternatives(routes){
       const bb = new maplibregl.LngLatBounds();
       routes[sel].geometry.coordinates.forEach(c => bb.extend(c));
       map.fitBounds(bb, { padding: 80 });
+      $('routeSteps').innerHTML = _stepsHtml(routes[sel].steps);
     };
   });
   log(`itineraires: ${routes.length} alternatives (principal ${_fmtDist(routes[0].distance)})`, 'ok');

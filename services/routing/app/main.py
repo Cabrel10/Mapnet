@@ -1,5 +1,6 @@
 """Routing Service - FastAPI entrypoint."""
 import logging
+import math
 import os
 from typing import List
 
@@ -186,6 +187,79 @@ def navigate(req: RouteRequest):
     }
 
 
+
+
+# ---------------------------------------------------------------------------
+# Helpers: cardinality (N/S/E/O) + named steps (ronds-points / carrefours)
+# ---------------------------------------------------------------------------
+_CARD_FR = [
+    ("N", 337.5, 360.0), ("N", 0.0, 22.5),
+    ("NE", 22.5, 67.5), ("E", 67.5, 112.5), ("SE", 112.5, 157.5),
+    ("S", 157.5, 202.5), ("SO", 202.5, 247.5), ("O", 247.5, 292.5),
+    ("NO", 292.5, 337.5),
+]
+
+
+def _bearing_cardinal(lat1, lon1, lat2, lon2):
+    """Bearing initial (deg) entre deux points -> cardinal francais (N/NE/E...)."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    brg = (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+    for name, lo, hi in _CARD_FR:
+        if lo <= brg < hi:
+            return name
+    return "N"
+
+
+def _route_cardinality(geometry):
+    """Cardinalite globale depart->arrivee d'une geometrie GeoJSON LineString."""
+    coords = (geometry or {}).get("coordinates") or []
+    if len(coords) < 2:
+        return {"bearing": "?", "from_to": ""}
+    a, b = coords[0], coords[-1]  # [lon, lat]
+    card = _bearing_cardinal(a[1], a[0], b[1], b[0])
+    return {"bearing": card, "from_to": f"depart -> {card} -> arrivee"}
+
+
+def _named_steps(route_obj, max_steps=12):
+    """Extrait les etapes avec un nom de voie / rond-point / carrefour.
+
+    Garde surtout les maneuvers 'roundabout' / 'rotary' (ronds-points) et les
+    changements de voie nommes, pour guider l'utilisateur avec des reperes
+    concrets au lieu d'une simple distance/duree.
+    """
+    out = []
+    for leg in route_obj.get("legs", []):
+        for s in leg.get("steps", []):
+            man = s.get("maneuver", {}) or {}
+            mtype = str(man.get("type", "")).lower()
+            name = str(s.get("name", "") or "")
+            ref = str(s.get("ref", "") or "")
+            label = name or ref
+            is_roundabout = mtype in ("roundabout", "rotary")
+            # garder ronds-points, arrives/departs, et voies nommees
+            keep = is_roundabout or mtype in ("depart", "arrive") or bool(label)
+            if not keep:
+                continue
+            instruction = _instruction_fr(man, label)
+            if is_roundabout:
+                exit_n = man.get("exit", "")
+                instruction = f"Rond-point {label or ''} (sortie {exit_n})".strip()
+            out.append({
+                "instruction": instruction,
+                "name": label,
+                "maneuver": mtype,
+                "modifier": str(man.get("modifier", "") or ""),
+                "distance": float(s.get("distance", 0.0) or 0.0),
+                "location": man.get("location", []),
+            })
+            if len(out) >= max_steps:
+                return out
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Multi-itinerary endpoint: up to 4 routes per destination.
 #
@@ -233,12 +307,15 @@ def alternatives(req: RouteRequest, count: int = 4):
     routes = sorted(routes, key=lambda r: r.get("duration", 0.0))[:n]
     out = []
     for i, r in enumerate(routes, start=1):
+        geom = r.get("geometry", {})
         out.append({
             "rank": i,
             "distance": r.get("distance", 0.0),
             "duration": r.get("duration", 0.0),
-            "geometry": r.get("geometry", {}),
+            "geometry": geom,
             "badges": annotate_route_surfaces(r),
+            "cardinal": _route_cardinality(geom),
+            "steps": _named_steps(r),
         })
 
     return {"status": "ok", "count": len(out), "routes": out}
