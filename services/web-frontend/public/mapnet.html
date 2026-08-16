@@ -127,7 +127,7 @@ async function loadEdges(){
     if(map.getSource('edges')) map.removeSource('edges');
     map.addSource('edges', { type:'geojson', data: fc });
     map.addLayer({ id:'edges-line', type:'line', source:'edges',
-      paint:{ 'line-color':['match',['get','status'],'validated','#22c55e','non_cartographie_osm','#f97316','#38bdf8'], 'line-width':5 } });
+      paint:{ 'line-color':['match',['get','status'],'validated','#22c55e','non_cartographie_osm','#f97316','#94a3b8'], 'line-width':5 } });
     log(`edges chargés: ${fc.features.length} features`, 'ok');
     metric('edges features', fc.features.length);
     window._edges = fc;
