@@ -199,12 +199,14 @@ def import_buildings(city):
         f"-lco GEOMETRY_NAME=geom -t_srs EPSG:4326 "
         f"-nlt MULTIPOLYGON -lco SPATIAL_INDEX=GIST",
         timeout=3600)
-    # height peut être absent/typé float par ogr2ogr ; cast prudent
+    # mapnet_buildings.geom accepte MultiPolygon (migré une fois via
+    # ALTER ... TYPE geometry(MultiPolygon,4326)). height est typé double
+    # precision par ogr2ogr ; names est déjà json.
     pg(f"""INSERT INTO mapnet_buildings
         (building_id,name,class,height_m,num_floors,source,geom,city)
         SELECT left(id,100),
-          (names::json->>'primary'),
-          subtype,
+          (names->>'primary'),
+          COALESCE(subtype,class),
           CASE WHEN height IS NOT NULL THEN height::numeric ELSE NULL END,
           num_floors,
           'overture',
