@@ -286,3 +286,51 @@ def search_places(
         for r in rows
     ]
     return {"status": "ok", "count": len(results), "query": q, "results": results}
+
+
+@app.get("/api/v1/places/building-at")
+def building_at(lat: float, lon: float, radius: float = 40.0):
+    """Return named building(s) near a position.
+
+    Backed by mapnet_building_labels (buildings labelled either by their own
+    name or by the nearest POI within 25 m). Answers the "what building am I
+    looking at / standing next to?" question for the map and navigation UI.
+    """
+    sql = """
+        SELECT building_id, label, label_source, poi_category, class, city,
+               latitude, longitude,
+               ST_Distance(
+                   ST_SetSRID(ST_MakePoint(longitude, latitude),4326)::geography,
+                   ST_SetSRID(ST_MakePoint(:lon,:lat),4326)::geography
+               ) AS dist_m
+        FROM mapnet_building_labels
+        WHERE label IS NOT NULL
+          AND ST_DWithin(
+                  ST_SetSRID(ST_MakePoint(longitude, latitude),4326)::geography,
+                  ST_SetSRID(ST_MakePoint(:lon,:lat),4326)::geography,
+                  :radius)
+        ORDER BY dist_m ASC
+        LIMIT 10
+    """
+    try:
+        with SessionLocal() as session:
+            rows = session.execute(
+                text(sql), {"lat": lat, "lon": lon, "radius": radius}
+            ).mappings().all()
+    except Exception as exc:
+        logger.exception("building-at failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"building-at error: {exc}",
+        ) from exc
+    buildings = [
+        {
+            "building_id": r["building_id"], "label": r["label"],
+            "label_source": r["label_source"], "poi_category": r["poi_category"],
+            "class": r["class"], "city": r["city"],
+            "latitude": r["latitude"], "longitude": r["longitude"],
+            "distance_m": round(float(r["dist_m"]), 1),
+        }
+        for r in rows
+    ]
+    return {"status": "ok", "count": len(buildings), "buildings": buildings}
