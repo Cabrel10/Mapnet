@@ -192,23 +192,23 @@ def search_places(
 
     # normalized column expression (accent + case folded)
     def _nx(col: str) -> str:
-        return f"unaccent(lower({col}))"
+        return f"mapnet_norm({col})"
 
     # Text relevance score (0..100), computed the same way for every source.
     def _text_score(col: str) -> str:
         n = _nx(col)
         return f"""
             (CASE
-                WHEN {n} = unaccent(:q_norm)                 THEN 100
-                WHEN {n} LIKE unaccent(:prefix)              THEN 70
-                WHEN {n} LIKE unaccent(:like)                THEN 55
+                WHEN {n} = mapnet_norm(:q_norm)                 THEN 100
+                WHEN {n} LIKE mapnet_norm(:prefix)              THEN 70
+                WHEN {n} LIKE mapnet_norm(:like)                THEN 55
                 ELSE 40
             END)"""
 
     # AND-of-words WHERE fragment: all query words present in the (normalized) name
     def _where_words(col: str) -> str:
         n = _nx(col)
-        conds = " AND ".join(f"{n} LIKE unaccent(:w{i})" for i in range(len(words)))
+        conds = " AND ".join(f"{n} LIKE mapnet_norm(:w{i})" for i in range(len(words)))
         return conds
 
     # proximity score: up to +25 within ~0 m, decaying to 0 by ~50 km
