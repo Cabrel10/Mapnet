@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
 
 from .osrm_client import map_match, route, nearest, route_alternatives, annotate_route_surfaces
+from . import valhalla_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -55,14 +56,67 @@ def map_match_route(req: MapMatchRequest):
     return {"status": "ok", "matchings": data.get("matchings", []), "tracepoints": data.get("tracepoints", [])}
 
 
+def _valhalla_to_osrm_route(data: dict) -> dict:
+    """Adapt a Valhalla /route response to the OSRM-style {routes:[...]} shape
+    the mobile client already consumes, so switching engines is transparent."""
+    trip = data.get("trip", {})
+    legs = trip.get("legs", [])
+    summary = trip.get("summary", {})
+    steps = []
+    if legs:
+        for m in legs[0].get("maneuvers", []):
+            steps.append({
+                "instruction": m.get("instruction"),
+                "distance": (m.get("length") or 0) * 1000.0,  # km -> m
+                "duration": m.get("time"),
+                "name": (m.get("street_names") or [None])[0],
+            })
+    return {
+        "routes": [{
+            "distance": (summary.get("length") or 0) * 1000.0,  # km -> m
+            "duration": summary.get("time"),
+            "geometry": legs[0].get("shape") if legs else None,
+            "legs": [{"steps": steps}],
+            "engine": "valhalla",
+        }]
+    }
+
+
 @app.post("/api/v1/routing/route")
-def calculate_route(req: RouteRequest):
+def calculate_route(req: RouteRequest, engine: str = "auto"):
+    """Compute a route.
+
+    engine=auto (default): Valhalla local first, OSRM fallback on failure.
+    engine=valhalla | osrm: force a specific engine.
+
+    Valhalla is preferred because its road graph is derived from the same
+    OSM/Overture-aligned data MAPNET displays, reducing 'route to a non-existent
+    road' artifacts seen with the legacy OSRM public backend.
+    """
+    engine = (engine or "auto").lower()
+    used = None
+    # Try Valhalla unless OSRM explicitly forced
+    if engine in ("auto", "valhalla"):
+        try:
+            vdata = valhalla_client.route(req.from_lat, req.from_lon,
+                                          req.to_lat, req.to_lon)
+            out = _valhalla_to_osrm_route(vdata)
+            out["status"] = "ok"
+            out["engine"] = "valhalla"
+            return out
+        except Exception as exc:
+            logger.warning("Valhalla route failed (%s); engine=%s", exc, engine)
+            if engine == "valhalla":
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                                    detail=f"valhalla: {exc}") from exc
+            used = "osrm-fallback"
+    # OSRM path (explicit or fallback)
     try:
         data = route(req.from_lat, req.from_lon, req.to_lat, req.to_lon)
     except Exception as exc:
-        logger.error("Routing failed: %s", exc)
+        logger.error("Routing failed (osrm): %s", exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    return {"status": "ok", "routes": data.get("routes", [])}
+    return {"status": "ok", "engine": used or "osrm", "routes": data.get("routes", [])}
 
 
 @app.get("/api/v1/routing/nearest")
@@ -319,3 +373,88 @@ def alternatives(req: RouteRequest, count: int = 4):
         })
 
     return {"status": "ok", "count": len(out), "routes": out}
+
+
+# ---------------------------------------------------------------------------
+# Valhalla local (moteur principal) — fallback OSRM conservé sur les endpoints
+# historiques ci-dessus. MAPNET parle à Valhalla ; le client mobile parle à MAPNET.
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/routing/engines")
+def engines():
+    """Diagnostic : quels moteurs de routage sont disponibles."""
+    va = valhalla_client.available()
+    return {
+        "valhalla": {"available": va, "url": valhalla_client.VALHALLA_URL},
+        "osrm": {"available": True, "note": "fallback historique"},
+        "primary": "valhalla" if va else "osrm",
+    }
+
+
+@app.get("/api/v1/routing/valhalla/status")
+def valhalla_status():
+    try:
+        return valhalla_client.status()
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"valhalla indisponible: {exc}") from exc
+
+
+@app.post("/api/v1/routing/route-v")
+def route_valhalla(req: RouteRequest, costing: str = "auto"):
+    """Itinéraire via Valhalla local avec narratives FR turn-by-turn."""
+    try:
+        data = valhalla_client.route(req.from_lat, req.from_lon,
+                                     req.to_lat, req.to_lon, costing=costing)
+    except Exception as exc:
+        logger.error("Valhalla route failed: %s", exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=str(exc)) from exc
+    trip = data.get("trip", {})
+    legs = trip.get("legs", [])
+    maneuvers = []
+    if legs:
+        for m in legs[0].get("maneuvers", []):
+            maneuvers.append({
+                "instruction": m.get("instruction"),
+                "distance_km": m.get("length"),
+                "time_s": m.get("time"),
+                "street": (m.get("street_names") or [None])[0],
+            })
+    return {
+        "status": "ok",
+        "engine": "valhalla",
+        "summary": trip.get("summary", {}),
+        "maneuvers": maneuvers,
+        "shape": legs[0].get("shape") if legs else None,
+    }
+
+
+@app.post("/api/v1/routing/trace-attributes")
+def trace_attributes_ep(req: MapMatchRequest, costing: str = "auto"):
+    """Map matching Valhalla : trace GPS bruitée -> segments routiers + vitesses."""
+    if len(req.points) < 2:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Need at least 2 points")
+    try:
+        data = valhalla_client.trace_attributes(
+            [p.model_dump() for p in req.points], costing=costing)
+    except Exception as exc:
+        logger.error("Valhalla trace_attributes failed: %s", exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=str(exc)) from exc
+    edges = []
+    for e in data.get("edges", []):
+        edges.append({
+            "names": e.get("names", []),
+            "length_km": e.get("length"),
+            "speed": e.get("speed"),
+            "road_class": e.get("road_class"),
+            "way_id": e.get("way_id"),
+        })
+    return {
+        "status": "ok",
+        "engine": "valhalla",
+        "edges": edges,
+        "matched_points": data.get("matched_points", []),
+    }
