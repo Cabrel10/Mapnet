@@ -154,6 +154,98 @@ _CITY_CENTRES = {
     "bafoussam": (10.4176, 5.4783),
 }
 
+# Cameroon is UTC+1 (WAT), no DST.
+import datetime as _dt
+
+_WAT = _dt.timezone(_dt.timedelta(hours=1))
+_DAY_IDX = {"mo": 0, "tu": 1, "we": 2, "th": 3, "fr": 4, "sa": 5, "su": 6}
+_DAY_ORDER = ["mo", "tu", "we", "th", "fr", "sa", "su"]
+
+
+def compute_open_status(opening_hours: Optional[str], now: Optional[_dt.datetime] = None):
+    """Lightweight OSM `opening_hours` evaluator (dependency-free).
+
+    Returns {"is_open": True|False|None, "label": str}. is_open is None
+    ("unknown") when there are no hours or the rule is too complex to parse
+    safely — we never guess. Supports the common Cameroon POI shapes:
+      "24/7"
+      "Mo-Fr 08:00-18:00"
+      "Mo-Fr 08:00-12:00,14:00-18:00"
+      "Mo-Sa 09:00-20:00; Su 10:00-14:00"
+    """
+    if not opening_hours or not opening_hours.strip():
+        return {"is_open": None, "label": "unknown"}
+    spec = opening_hours.strip().lower()
+    if now is None:
+        now = _dt.datetime.now(_WAT)
+    if "24/7" in spec:
+        return {"is_open": True, "label": "open (24/7)"}
+
+    today = now.weekday()  # Mon=0
+    cur_min = now.hour * 60 + now.minute
+
+    def _day_matches(day_token: str) -> bool:
+        day_token = day_token.strip()
+        if not day_token:
+            return True  # no day part => every day
+        for part in day_token.split(","):
+            part = part.strip()
+            if "-" in part:
+                a, b = part.split("-", 1)
+                a, b = a.strip()[:2], b.strip()[:2]
+                if a in _DAY_IDX and b in _DAY_IDX:
+                    ia, ib = _DAY_IDX[a], _DAY_IDX[b]
+                    span = ([*range(ia, 7)] + [*range(0, ib + 1)]) if ia > ib else list(range(ia, ib + 1))
+                    if today in span:
+                        return True
+            elif part[:2] in _DAY_IDX and _DAY_IDX[part[:2]] == today:
+                return True
+        return False
+
+    def _time_open(time_token: str) -> Optional[bool]:
+        matched_any = False
+        for rng in time_token.split(","):
+            rng = rng.strip()
+            if "-" not in rng:
+                continue
+            s, e = rng.split("-", 1)
+            try:
+                sh, sm = (int(x) for x in s.strip().split(":"))
+                eh, em = (int(x) for x in e.strip().split(":"))
+            except ValueError:
+                return None
+            matched_any = True
+            start = sh * 60 + sm
+            end = eh * 60 + em
+            if end <= start:  # crosses midnight
+                if cur_min >= start or cur_min < end:
+                    return True
+            elif start <= cur_min < end:
+                return True
+        return False if matched_any else None
+
+    import re as _re
+    try:
+        for rule in spec.split(";"):
+            rule = rule.strip()
+            if not rule:
+                continue
+            m = _re.match(r"^([a-z,\-\s]*?)\s*(\d{1,2}:\d{2}.*)$", rule)
+            if not m:
+                continue
+            day_part, time_part = m.group(1), m.group(2)
+            if not _day_matches(day_part):
+                continue
+            res = _time_open(time_part)
+            if res is True:
+                return {"is_open": True, "label": "open now"}
+            if res is False:
+                return {"is_open": False, "label": "closed now"}
+    except Exception:  # never fail the request on a weird rule
+        return {"is_open": None, "label": "unknown"}
+    # A rule for today existed but none matched the current time => closed.
+    return {"is_open": False, "label": "closed now"}
+
 
 @app.get("/api/v1/places/search")
 def search_places(
@@ -334,3 +426,220 @@ def building_at(lat: float, lon: float, radius: float = 40.0):
         for r in rows
     ]
     return {"status": "ok", "count": len(buildings), "buildings": buildings}
+
+
+# ---------------------------------------------------------------------------
+# nearest-district — reverse-geocode a click to its administrative division.
+# Answers level-3 of the 3-level map pick (building / POI / district).
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/places/nearest-district")
+def nearest_district(lat: float, lon: float):
+    # A point in Cameroon is contained by several *nested* divisions
+    # (country > region > county > locality > neighborhood). Naive KNN
+    # ordering (geom <-> point) returns the country polygon first because it
+    # also contains the point (distance 0). We instead want the MOST SPECIFIC
+    # division. Strategy:
+    #   1. Prefer divisions that actually CONTAIN the point, smallest area
+    #      first, and rank fine-grained subtypes (neighborhood/microhood)
+    #      above coarse ones (locality/county/region/country).
+    #   2. If nothing contains the point (offshore / sparse coverage), fall
+    #      back to true nearest by geography distance.
+    point = "ST_SetSRID(ST_MakePoint(:lon,:lat),4326)"
+    # subtype ranking: lower number = more specific (better)
+    rank_expr = """
+        CASE lower(COALESCE(subtype,''))
+            WHEN 'microhood'    THEN 0
+            WHEN 'neighborhood' THEN 1
+            WHEN 'quarter'      THEN 1
+            WHEN 'locality'     THEN 2
+            WHEN 'county'       THEN 3
+            WHEN 'region'       THEN 4
+            WHEN 'country'      THEN 5
+            ELSE 2
+        END
+    """
+    contains_sql = f"""
+        SELECT name, COALESCE(city,'') AS city, subtype, admin_level,
+               ST_Distance(geom::geography, {point}::geography) AS dist_m,
+               ST_Area(geom::geography) AS area_m2
+        FROM mapnet_divisions
+        WHERE geom IS NOT NULL
+          AND ST_Contains(geom, {point})
+        ORDER BY ({rank_expr}) ASC, area_m2 ASC
+        LIMIT 1
+    """
+    nearest_sql = f"""
+        SELECT name, COALESCE(city,'') AS city, subtype, admin_level,
+               ST_Distance(geom::geography, {point}::geography) AS dist_m,
+               ST_Area(geom::geography) AS area_m2
+        FROM mapnet_divisions
+        WHERE geom IS NOT NULL
+          AND COALESCE(admin_level, 99) <> 0
+        ORDER BY geom <-> {point}
+        LIMIT 1
+    """
+    try:
+        with SessionLocal() as session:
+            r = session.execute(text(contains_sql), {"lat": lat, "lon": lon}).mappings().first()
+            if not r:
+                r = session.execute(text(nearest_sql), {"lat": lat, "lon": lon}).mappings().first()
+    except Exception as exc:
+        logger.exception("nearest-district failed")
+        raise HTTPException(status_code=500, detail=f"nearest-district error: {exc}") from exc
+    if not r:
+        return {"status": "ok", "name": None, "city": None}
+    return {
+        "status": "ok",
+        "name": r["name"],
+        "city": r["city"],
+        "subtype": r["subtype"],
+        "admin_level": r["admin_level"],
+        "distance_m": round(float(r["dist_m"]), 1),
+        "area_m2": round(float(r["area_m2"]), 1),
+    }
+
+
+# ---------------------------------------------------------------------------
+# categories — the distinct POI categories with counts (drives the UI filter).
+# ---------------------------------------------------------------------------
+_CATEGORY_ICONS = {
+    "restaurant": "🍽️", "hotel": "🏨", "school": "🏫",
+    "college_university": "🎓", "hospital": "🏥", "pharmacy": "💊",
+    "bank": "🏦", "shopping": "🛍️", "beauty_salon": "💇",
+    "spas": "🧖", "religious_organization": "⛪",
+    "professional_services": "💼", "real_estate_service": "🏘️",
+    "party_and_event_planning": "🎉", "gas_station": "⛽",
+}
+
+
+@app.get("/api/v1/places/categories")
+def list_categories(min_count: int = 1):
+    sql = """
+        SELECT category, COUNT(*) AS n
+        FROM raw_places
+        WHERE category IS NOT NULL AND category <> ''
+        GROUP BY category
+        HAVING COUNT(*) >= :min_count
+        ORDER BY n DESC
+    """
+    try:
+        with SessionLocal() as session:
+            rows = session.execute(text(sql), {"min_count": min_count}).mappings().all()
+    except Exception as exc:
+        logger.exception("categories failed")
+        raise HTTPException(status_code=500, detail=f"categories error: {exc}") from exc
+    cats = [
+        {
+            "category": r["category"],
+            "count": int(r["n"]),
+            "icon": _CATEGORY_ICONS.get((r["category"] or "").lower(), "📍"),
+        }
+        for r in rows
+    ]
+    return {"status": "ok", "count": len(cats), "categories": cats}
+
+
+# ---------------------------------------------------------------------------
+# by-category — POIs of a category, optionally near a point, with open status.
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/places/by-category")
+def by_category(
+    category: str,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    radius: Optional[float] = None,
+    open_now: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+):
+    category = (category or "").strip()
+    if not category:
+        raise HTTPException(status_code=400, detail="category is required")
+
+    params = {"category": category.lower(), "limit": limit, "offset": offset}
+    where = ["lower(category) = :category"]
+    dist_expr = "NULL"
+    order = "name ASC"
+    if lat is not None and lon is not None:
+        params.update({"lat": lat, "lon": lon})
+        dist_expr = (
+            "ST_Distance(geom::geography, "
+            "ST_SetSRID(ST_MakePoint(:lon,:lat),4326)::geography)"
+        )
+        order = "dist_m ASC NULLS LAST"
+        if radius:
+            params["radius"] = radius
+            where.append(
+                "ST_DWithin(geom::geography, "
+                "ST_SetSRID(ST_MakePoint(:lon,:lat),4326)::geography, :radius)"
+            )
+    sql = f"""
+        SELECT place_id, name, category, subcategory, address, phone, website,
+               rating, opening_hours, description,
+               ST_Y(geom) AS latitude, ST_X(geom) AS longitude,
+               {dist_expr} AS dist_m
+        FROM raw_places
+        WHERE {' AND '.join(where)}
+        ORDER BY {order}
+        LIMIT :limit OFFSET :offset
+    """
+    try:
+        with SessionLocal() as session:
+            rows = session.execute(text(sql), params).mappings().all()
+    except Exception as exc:
+        logger.exception("by-category failed")
+        raise HTTPException(status_code=500, detail=f"by-category error: {exc}") from exc
+
+    results = []
+    for r in rows:
+        st = compute_open_status(r["opening_hours"])
+        if open_now and st["is_open"] is not True:
+            continue
+        results.append({
+            "place_id": r["place_id"], "name": r["name"],
+            "category": r["category"], "subcategory": r["subcategory"],
+            "address": r["address"], "phone": r["phone"], "website": r["website"],
+            "rating": float(r["rating"]) if r["rating"] is not None else None,
+            "opening_hours": r["opening_hours"], "description": r["description"],
+            "latitude": r["latitude"], "longitude": r["longitude"],
+            "distance_m": round(float(r["dist_m"]), 1) if r["dist_m"] is not None else None,
+            "is_open": st["is_open"], "open_status": st["label"],
+        })
+    return {"status": "ok", "count": len(results), "category": category, "results": results}
+
+
+# ---------------------------------------------------------------------------
+# status — is a place open now? by place_id or nearest to lat/lon.
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/places/status")
+def place_status(
+    id: Optional[str] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+):
+    if id:
+        sql = "SELECT place_id, name, opening_hours FROM raw_places WHERE place_id = :id LIMIT 1"
+        params = {"id": id}
+    elif lat is not None and lon is not None:
+        sql = (
+            "SELECT place_id, name, opening_hours FROM raw_places "
+            "WHERE geom IS NOT NULL "
+            "ORDER BY geom <-> ST_SetSRID(ST_MakePoint(:lon,:lat),4326) LIMIT 1"
+        )
+        params = {"lat": lat, "lon": lon}
+    else:
+        raise HTTPException(status_code=400, detail="provide id or lat+lon")
+    try:
+        with SessionLocal() as session:
+            r = session.execute(text(sql), params).mappings().first()
+    except Exception as exc:
+        logger.exception("status failed")
+        raise HTTPException(status_code=500, detail=f"status error: {exc}") from exc
+    if not r:
+        raise HTTPException(status_code=404, detail="place not found")
+    st = compute_open_status(r["opening_hours"])
+    return {
+        "status": "ok", "place_id": r["place_id"], "name": r["name"],
+        "opening_hours": r["opening_hours"],
+        "is_open": st["is_open"], "open_status": st["label"],
+    }

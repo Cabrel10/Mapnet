@@ -10,10 +10,11 @@
 //
 //	/               -> static frontend (mapnet.html)
 //	/assets/*       -> static assets
-//	/api/gps/*      -> gps-collect   (GPX ingestion)
-//	/api/map/*      -> map-engine    (edges + versioned sync)
-//	/api/route/*    -> routing       (itineraries: route, nearest, map-match)
-//	/health         -> gateway liveness
+//	/api/gps/*        -> gps-collect   (GPX ingestion)
+//	/api/map/*        -> map-engine    (edges + versioned sync)
+//	/api/route/*      -> routing       (itineraries: route, nearest, map-match)
+//	/api/v1/places/*  -> places        (search, building-at, nearest-district, categories, status)
+//	/health           -> gateway liveness
 package main
 
 import (
@@ -71,6 +72,7 @@ func main() {
 	gpsTarget := env("GPS_COLLECT_URL", "http://localhost:8081")
 	mapTarget := env("MAP_ENGINE_URL", "http://localhost:8082")
 	routeTarget := env("ROUTING_URL", "http://localhost:8093")
+	placesTarget := env("PLACES_URL", "http://localhost:8083")
 
 	gpsProxy, err := newProxy(gpsTarget, "/api/gps")
 	if err != nil {
@@ -84,11 +86,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("route proxy: %v", err)
 	}
+	// places keeps its full /api/v1/places prefix (the FastAPI service routes on
+	// it), so we strip nothing.
+	placesProxy, err := newProxy(placesTarget, "")
+	if err != nil {
+		log.Fatalf("places proxy: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/gps/", gpsProxy)
 	mux.Handle("/api/map/", mapProxy)
 	mux.Handle("/api/route/", routeProxy)
+	mux.Handle("/api/v1/places/", placesProxy)
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -110,7 +119,7 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("gateway listening on :%s (gps=%s map=%s route=%s static=%s)", port, gpsTarget, mapTarget, routeTarget, staticDir)
+	log.Printf("gateway listening on :%s (gps=%s map=%s route=%s places=%s static=%s)", port, gpsTarget, mapTarget, routeTarget, placesTarget, staticDir)
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("listen: %v", err)

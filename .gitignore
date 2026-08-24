@@ -31,3 +31,6 @@ apk_dist/
 # Données runtime du backend (snapshots / caches générés)
 backend/data/captures_snapshot.json
 backend/data/nominatim_cache.json
+
+# compiled gateway binary (build artifact)
+services/gateway/gateway
