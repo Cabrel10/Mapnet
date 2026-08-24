@@ -36,6 +36,38 @@ func env(k, def string) string {
 	return def
 }
 
+// resolveStaticDir returns the first existing candidate directory that holds
+// the built frontend (mapnet.html). It probes, in order:
+//  1. ./services/web-frontend/public   (gateway launched from the repo root)
+//  2. ../../web-frontend/public         (gateway launched from services/gateway)
+//  3. dir(executable)/../web-frontend/public
+//
+// If none exist it returns the first candidate so the log makes the missing
+// path obvious instead of silently 404-ing on an unrelated /home/<user> path.
+func resolveStaticDir() string {
+	candidates := []string{
+		"services/web-frontend/public",
+		filepath.Join("..", "..", "web-frontend", "public"),
+	}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(filepath.Dir(exe), "..", "web-frontend", "public"))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(wd, "services", "web-frontend", "public"))
+	}
+	for _, c := range candidates {
+		if st, err := os.Stat(filepath.Join(c, "mapnet.html")); err == nil && !st.IsDir() {
+			if abs, err := filepath.Abs(c); err == nil {
+				return abs
+			}
+			return c
+		}
+	}
+	return candidates[0]
+}
+
 // newProxy builds a reverse proxy to target, stripping stripPrefix from the
 // incoming path so /api/gps/... reaches the backend as /...
 func newProxy(target, stripPrefix string) (*httputil.ReverseProxy, error) {
@@ -68,7 +100,11 @@ func newProxy(target, stripPrefix string) (*httputil.ReverseProxy, error) {
 
 func main() {
 	port := env("PORT", "8080")
-	staticDir := env("STATIC_DIR", "/home/user/webapp/services/web-frontend/public")
+	// STATIC_DIR points at the built frontend served at "/". The default is
+	// resolved relative to the gateway's working directory (the MAPNET repo
+	// root) so it is not tied to a specific home directory. We probe a few
+	// well-known locations and fall back to the repo-relative path.
+	staticDir := env("STATIC_DIR", resolveStaticDir())
 	gpsTarget := env("GPS_COLLECT_URL", "http://localhost:8081")
 	mapTarget := env("MAP_ENGINE_URL", "http://localhost:8082")
 	routeTarget := env("ROUTING_URL", "http://localhost:8093")

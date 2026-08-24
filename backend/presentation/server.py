@@ -51,6 +51,12 @@ _GPS_POSITION = os.environ.get(
 _GPS_POSITIONS = os.environ.get(
     "MAPNET_GPS_POSITIONS_URL", f"{_GATEWAY_URL}/api/gps/api/v1/positions"
 )
+# Places API (search / categories / by-category / status / building-at /
+# nearest-district). The PROD frontend calls these through its own origin so
+# there is no CORS and no hard-coded microservice port in the browser; we
+# forward to the Go gateway which keeps the full /api/v1/places prefix.
+_PLACES_BASE = os.environ.get("MAPNET_PLACES_BASE_URL", _GATEWAY_URL)
+
 _NOMINATIM = os.environ.get(
     "MAPNET_NOMINATIM_URL", "https://nominatim.openstreetmap.org/search"
 )
@@ -192,6 +198,15 @@ class Handler(BaseHTTPRequestHandler):
                     if kv.startswith("minutes="):
                         qs = "?" + kv
                 code, obj = _proxy_get(_GPS_POSITIONS + qs)
+                return self._json(obj, code)
+            if path.startswith("/api/v1/places/"):
+                # Transparent passthrough to the places API (via gateway).
+                # Keeps the full original path + query string so search,
+                # categories, by-category, status, building-at and
+                # nearest-district all work from the PROD origin.
+                query = urlparse(self.path).query
+                url = _PLACES_BASE + path + (("?" + query) if query else "")
+                code, obj = _proxy_get(url)
                 return self._json(obj, code)
             return self._json({"error": "not_found", "path": path}, 404)
         except Exception as e:  # pragma: no cover
