@@ -30,7 +30,7 @@ import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, urlencode
+from urllib.parse import urlparse, urlencode, quote as _urlquote
 from urllib.request import Request as _UrlRequest, urlopen as _urlopen
 from urllib.error import URLError as _URLError
 
@@ -165,6 +165,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in ("/", "/index.html"):
                 return self._serve_static("index.html", "text/html; charset=utf-8")
+            if path == "/app.js":
+                return self._serve_static("app.js", "application/javascript; charset=utf-8")
             if path == "/favicon.ico":
                 return self._send(204, b"", "image/x-icon")
             if path == "/health":
@@ -254,13 +256,18 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return self._json(obj, code)
             if path == "/api/routing/alternatives":
-                # Itinéraires alternatifs avec badges surface (proxy direct 8093).
-                code, obj = _proxy_post(_ROUTING_ALTERNATIVES, {
+                # Itinéraires alternatifs avec VRAI profil (proxy direct 8093).
+                # count + costing passent en query ; A/B en corps JSON.
+                cnt = int(data.get("count", 4))
+                costing = str(data.get("costing") or data.get("profile") or "auto")
+                # normalisation minimale (le service fait la table complète)
+                url = (f"{_ROUTING_ALTERNATIVES}?count={cnt}"
+                       f"&costing={_urlquote(costing)}")
+                code, obj = _proxy_post(url, {
                     "from_lat": float(data.get("from_lat", 0.0)),
                     "from_lon": float(data.get("from_lon", 0.0)),
                     "to_lat": float(data.get("to_lat", 0.0)),
                     "to_lon": float(data.get("to_lon", 0.0)),
-                    "count": int(data.get("count", 4)),
                 })
                 return self._json(obj, code)
             if path == "/api/routing/by_names":

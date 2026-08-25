@@ -254,15 +254,20 @@ def search_places(
     lat: Optional[float] = None,
     lon: Optional[float] = None,
     kinds: Optional[str] = None,
+    grouped: bool = False,
 ):
     """Unified, ranked, Cameroon-first search.
 
     Parameters
     ----------
-    q      : free-text query.
-    limit  : max results.
-    lat/lon: optional user position -> proximity boost.
-    kinds  : optional CSV filter among {division, place, building}.
+    q       : free-text query.
+    limit   : max results.
+    lat/lon : optional user position -> proximity boost.
+    kinds   : optional CSV filter among {division, place, building}.
+    grouped : when true, also return a `groups` object splitting the results
+              into districts / neighborhoods / places / buildings for the
+              hierarchical search dropdown (the flat `results` list is kept
+              for backward compatibility).
     """
     q = (q or "").strip()
     if not q:
@@ -377,7 +382,28 @@ def search_places(
         }
         for r in rows
     ]
-    return {"status": "ok", "count": len(results), "query": q, "results": results}
+    payload = {"status": "ok", "count": len(results), "query": q, "results": results}
+    if grouped:
+        # Split ranked results into UI groups for the hierarchical dropdown.
+        # A division is a "neighborhood" when its category says so, else a
+        # "district". Flat `results` is kept for backward compatibility.
+        groups = {
+            "districts": [], "neighborhoods": [],
+            "places": [], "buildings": [], "roads": [],
+        }
+        for r in results:
+            if r["kind"] == "division":
+                cat = (r.get("category") or "").lower()
+                if cat in ("neighborhood", "quarter", "microhood"):
+                    groups["neighborhoods"].append(r)
+                else:
+                    groups["districts"].append(r)
+            elif r["kind"] == "building":
+                groups["buildings"].append(r)
+            else:
+                groups["places"].append(r)
+        payload["groups"] = groups
+    return payload
 
 
 @app.get("/api/v1/places/building-at")
@@ -537,6 +563,83 @@ def list_categories(min_count: int = 1):
         for r in rows
     ]
     return {"status": "ok", "count": len(cats), "categories": cats}
+
+
+# ---------------------------------------------------------------------------
+# layer-counts — real per-layer object counts straight from PostGIS.
+#
+# The PROD status bar previously showed a single misleading "Lieux 12 556"
+# number (only raw_places). MapNet actually knows ~1.5M buildings, ~124k road
+# segments, ~140 divisions, etc. This endpoint exposes the true universe so the
+# UI can present honest per-layer counters. Read-only, cheap COUNT(*) queries.
+# ---------------------------------------------------------------------------
+# Cache mémoire TTL : on ne relance PAS 5 COUNT(*) (dont un sur 1,5M bâtiments)
+# à chaque rafraîchissement d'interface. Pour les grosses tables on utilise
+# l'estimation instantanée pg_class.reltuples (précise après ANALYZE) ; exact
+# COUNT réservé aux petites tables. TTL par défaut 300 s (surchargable).
+import time as _time  # noqa: E402
+
+_LC_TTL = float(os.environ.get("LAYER_COUNTS_TTL", "300"))
+_lc_cache: dict[str, object] = {"ts": 0.0, "data": None}
+
+# (clé, table, exact?) — exact=True force COUNT(*) (petites tables) ;
+# exact=False autorise l'estimation reltuples (grosses tables).
+_LC_TARGETS = [
+    ("pois", "raw_places", True),
+    ("buildings", "mapnet_buildings", False),   # ~1.5M -> estimation
+    ("named_buildings", "mapnet_building_labels", True),
+    ("roads", "mapnet_edges", False),           # ~124k -> estimation
+    ("districts", "mapnet_divisions", True),
+]
+
+
+def _compute_layer_counts() -> dict[str, int]:
+    counts: dict[str, int] = {}
+    with SessionLocal() as session:
+        for key, tbl, exact in _LC_TARGETS:
+            try:
+                if not exact:
+                    # Estimation instantanée (pas de scan de table).
+                    # NB: on filtre par relname (pas ::regclass) car psycopg2
+                    # confond le param ":t" avec la syntaxe de cast "::".
+                    est = session.execute(
+                        text("SELECT reltuples::bigint FROM pg_class "
+                             "WHERE relname = :t AND relkind = 'r'"),
+                        {"t": tbl},
+                    ).scalar()
+                    n = int(est or 0)
+                    # Si la table n'a jamais été ANALYZE (reltuples <= 0), COUNT réel.
+                    if n <= 0:
+                        n = int(session.execute(text(f"SELECT COUNT(*) FROM {tbl}")).scalar() or 0)
+                    counts[key] = n
+                else:
+                    counts[key] = int(
+                        session.execute(text(f"SELECT COUNT(*) FROM {tbl}")).scalar() or 0)
+            except Exception:  # noqa: BLE001 — table manquante ne casse pas le reste
+                counts[key] = 0
+                session.rollback()  # sinon la transaction reste avortée
+    return counts
+
+
+@app.get("/api/v1/places/layer-counts")
+def layer_counts(refresh: bool = False):
+    now = _time.time()
+    cached = _lc_cache.get("data")
+    age = now - float(_lc_cache.get("ts") or 0.0)
+    if cached is not None and not refresh and age < _LC_TTL:
+        return {"status": "ok", "counts": cached, "cached": True,
+                "age_s": round(age, 1), "ttl_s": _LC_TTL}
+    try:
+        counts = _compute_layer_counts()
+    except Exception as exc:  # pragma: no cover
+        logger.exception("layer-counts failed")
+        if cached is not None:  # sert le cache périmé plutôt que 500
+            return {"status": "stale", "counts": cached, "cached": True,
+                    "error": str(exc)}
+        raise HTTPException(status_code=500, detail=f"layer-counts error: {exc}") from exc
+    _lc_cache["data"] = counts
+    _lc_cache["ts"] = now
+    return {"status": "ok", "counts": counts, "cached": False, "ttl_s": _LC_TTL}
 
 
 # ---------------------------------------------------------------------------

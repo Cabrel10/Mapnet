@@ -1,389 +1,328 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>MapNet — Navigation géospatiale</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>MapNet — Cameroun</title>
+
+  <!-- MapLibre GL JS 4.7.x (CDN, no build step) -->
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <!-- Lucide Icons (SVG, no emoji) — pinned: 0.294.0 exposes window.lucide.createIcons -->
+  <script src="https://unpkg.com/lucide@0.294.0/dist/umd/lucide.js"></script>
+
   <style>
     :root{
-      --bg:#0e1116;--panel:rgba(22,27,34,.96);--accent:#1a73e8;--green:#34a853;
-      --amber:#fbbc04;--red:#ea4335;--muted:#9aa0a6;--border:#3c4043;--text:#e8eaed;
+      --bg:#0f1720; --panel:#ffffff; --ink:#0f1720; --muted:#6b7280;
+      --line:#e5e7eb; --brand:#2563eb; --brand-d:#1d4ed8; --accent:#f97316;
+      --ok:#16a34a; --warn:#d97706; --shadow:0 8px 30px rgba(2,6,23,.18);
+      --radius:14px;
     }
-    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-    html,body{margin:0;height:100%;font-family:Roboto,system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--text);overflow:hidden;}
-    #map{position:absolute;inset:0;z-index:1;}
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html,body{margin:0;height:100%;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink)}
+    #map{position:absolute;inset:0}
+    .lucide{stroke-width:2;vertical-align:middle}
+    button{font-family:inherit;cursor:pointer}
 
-    /* ---- Barre de recherche flottante (style Google Maps) ---- */
-    .search-wrap{position:absolute;top:14px;left:14px;z-index:1000;width:min(400px,calc(100% - 28px));}
-    .search-box{display:flex;align-items:center;background:#fff;border-radius:28px;box-shadow:0 2px 8px rgba(0,0,0,.35);overflow:hidden;}
-    .search-box .mn-logo{padding:0 6px 0 16px;font-size:20px;}
-    .search-box input{flex:1;border:0;outline:0;padding:14px 8px;font-size:15px;color:#202124;background:transparent;}
-    .search-box .ic{padding:0 14px;color:#5f6368;cursor:pointer;font-size:18px;user-select:none;}
-    .search-results{background:#fff;color:#202124;border-radius:14px;margin-top:6px;box-shadow:0 2px 8px rgba(0,0,0,.35);max-height:50vh;overflow-y:auto;display:none;}
-    .neighborhood-filter{margin-top:8px;width:100%;padding:9px 14px;border:1px solid var(--border);border-radius:18px;background:var(--panel);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.25);}
-    .agent-marker{width:18px;height:18px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 2px #1a73e8,0 2px 6px #000;}
-    .agent-marker.offline{background:#777;box-shadow:0 0 0 2px #777,0 2px 6px #000;}
-    .agent-marker.online{background:#1a73e8;animation:pulse 2s infinite;}
-    .search-results.on{display:block;}
-    .sr-item{padding:11px 16px;border-bottom:1px solid #eee;cursor:pointer;display:flex;gap:10px;align-items:flex-start;font-size:14px;}
-    .sr-item:hover{background:#f1f3f4;}
-    .sr-item .pin{color:var(--accent);}
-    .sr-item small{color:#5f6368;display:block;}
+    /* ---------- Search ---------- */
+    .search-wrap{position:absolute;top:14px;left:14px;right:14px;z-index:20;max-width:440px}
+    .search-box{display:flex;align-items:center;gap:8px;background:var(--panel);
+      border-radius:var(--radius);box-shadow:var(--shadow);padding:0 8px 0 12px;height:50px}
+    .search-box .brand{display:flex;align-items:center;justify-content:center;color:var(--brand)}
+    #q{flex:1;border:0;outline:0;font-size:15px;background:transparent;height:100%;color:var(--ink)}
+    .search-box .iconbtn{border:0;background:transparent;color:var(--muted);width:34px;height:34px;
+      border-radius:8px;display:flex;align-items:center;justify-content:center}
+    .search-box .iconbtn:hover{background:#f3f4f6;color:var(--ink)}
+    #q-clear{display:none}
 
-    /* ---- Contrôles flottants droite ---- */
-    .ctrl{position:absolute;right:14px;z-index:1000;display:flex;flex-direction:column;gap:10px;}
-    .ctrl.top{top:14px;}
-    .ctrl.bot{bottom:120px;}
-    .fab{width:46px;height:46px;border-radius:50%;background:#fff;color:#5f6368;border:0;box-shadow:0 2px 6px rgba(0,0,0,.35);font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
-    .fab:active{background:#e8eaed;}
-    .fab.accent{color:var(--accent);}
+    .results{margin-top:8px;background:var(--panel);border-radius:12px;box-shadow:var(--shadow);
+      overflow:hidden;max-height:60vh;overflow-y:auto;display:none}
+    .results.show{display:block}
+    .res-group-title{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+      color:var(--muted);padding:10px 14px 4px}
+    .res-item{display:flex;gap:11px;align-items:flex-start;padding:9px 14px;border-top:1px solid var(--line);cursor:pointer}
+    .res-item:first-child{border-top:0}
+    .res-item:hover{background:#f8fafc}
+    .res-ico{flex:0 0 auto;width:32px;height:32px;border-radius:9px;display:flex;align-items:center;
+      justify-content:center;background:#eef2ff;color:var(--brand)}
+    .res-txt{min-width:0}
+    .res-name{font-size:14px;font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .res-sub{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .res-empty{padding:16px 14px;color:var(--muted);font-size:13px}
 
-    /* ---- Panneau info bas (style GMaps place card) ---- */
-    .sheet{position:absolute;left:50%;transform:translateX(-50%);bottom:14px;z-index:1000;width:min(420px,calc(100% - 28px));background:var(--panel);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:16px;padding:14px 16px;box-shadow:0 4px 20px rgba(0,0,0,.5);display:none;}
-    .sheet.on{display:block;}
-    .sheet h3{margin:0 0 2px;font-size:16px;}
-    .sheet .meta{color:var(--muted);font-size:13px;margin-bottom:10px;}
-    .sheet .row{display:flex;gap:8px;}
-    .sheet button{flex:1;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:10px;font-weight:600;cursor:pointer;font-size:13px;}
-    .sheet button.sec{background:#2a2f36;color:var(--text);}
-    .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:8px;background:#2a2f36;margin-right:4px;}
+    /* ---------- Category chips ---------- */
+    .chips{position:absolute;top:74px;left:14px;right:14px;z-index:15;display:flex;gap:8px;
+      overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+    .chips::-webkit-scrollbar{display:none}
+    .chips.hidden{display:none}
+    .chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;background:var(--panel);
+      border:1px solid var(--line);border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;
+      box-shadow:0 2px 8px rgba(2,6,23,.08);white-space:nowrap}
+    .chip:hover{border-color:var(--brand);color:var(--brand)}
+    .chip.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+    .chip .lucide{width:15px;height:15px}
 
-    /* ---- Barre stats en bas (compacte) ---- */
-    .statbar{position:absolute;left:14px;bottom:14px;z-index:900;background:var(--panel);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:12px;padding:8px 12px;font-size:12px;display:flex;gap:14px;align-items:center;box-shadow:0 2px 10px rgba(0,0,0,.4);}
-    .statbar b{color:var(--green);}
-    .statbar .dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-right:5px;animation:pulse 2s infinite;}
-    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    /* ---------- Right controls ---------- */
+    .view-controls{position:absolute;right:14px;top:130px;z-index:15;display:flex;flex-direction:column;
+      gap:8px;background:var(--panel);border-radius:12px;box-shadow:var(--shadow);padding:6px}
+    .view-btn{border:0;background:transparent;color:var(--muted);width:40px;height:40px;border-radius:9px;
+      display:flex;align-items:center;justify-content:center}
+    .view-btn:hover{background:#f3f4f6;color:var(--ink)}
+    .view-btn.active{background:var(--brand);color:#fff}
 
-    /* ---- Toast ---- */
-    .toast{position:absolute;top:76px;left:50%;transform:translateX(-50%);z-index:1200;background:#202124;color:#fff;padding:10px 18px;border-radius:24px;font-size:13px;box-shadow:0 2px 10px rgba(0,0,0,.5);opacity:0;transition:opacity .3s;pointer-events:none;}
-    .toast.on{opacity:1;}
-    .route-info{position:absolute;top:76px;left:14px;z-index:1000;background:var(--accent);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;font-weight:600;box-shadow:0 2px 10px rgba(0,0,0,.4);display:none;}
-    .route-info.on{display:block;}
-    .leaflet-routing-container{display:none;}
-    @media(max-width:560px){.statbar{font-size:11px;gap:10px;}}
+    .zoom-controls{position:absolute;right:14px;bottom:110px;z-index:15;display:flex;flex-direction:column;
+      gap:1px;background:var(--panel);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+    .zoom-controls button{border:0;background:var(--panel);color:var(--ink);width:44px;height:44px;
+      display:flex;align-items:center;justify-content:center;font-size:20px}
+    .zoom-controls button:hover{background:#f3f4f6}
+    .zoom-controls button+button{border-top:1px solid var(--line)}
+
+    /* ---------- Place panel (bottom sheet) ---------- */
+    .place-panel{position:absolute;left:0;right:0;bottom:0;z-index:30;background:var(--panel);
+      border-radius:18px 18px 0 0;box-shadow:0 -6px 30px rgba(2,6,23,.22);
+      transform:translateY(110%);transition:transform .28s cubic-bezier(.2,.7,.3,1);
+      max-height:52vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0)}
+    .place-panel.show{transform:translateY(0)}
+    .place-panel .grip{width:44px;height:5px;border-radius:3px;background:#d1d5db;margin:9px auto 2px}
+    .pp-head{display:flex;gap:12px;align-items:flex-start;padding:6px 18px 10px}
+    .pp-ico{flex:0 0 auto;width:46px;height:46px;border-radius:12px;display:flex;align-items:center;
+      justify-content:center;background:#eef2ff;color:var(--brand)}
+    .pp-title{font-size:19px;font-weight:700;line-height:1.2;margin:0}
+    .pp-sub{font-size:13px;color:var(--muted);margin:3px 0 0}
+    .pp-close{margin-left:auto;border:0;background:#f3f4f6;color:var(--muted);width:34px;height:34px;
+      border-radius:50%;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+    .pp-body{padding:2px 18px 8px;overflow-y:auto}
+    .pp-row{display:flex;gap:10px;align-items:center;padding:7px 0;font-size:14px;border-top:1px solid var(--line)}
+    .pp-row:first-child{border-top:0}
+    .pp-row .lucide{color:var(--muted);width:18px;height:18px;flex:0 0 auto}
+    .badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;
+      padding:3px 9px;border-radius:999px}
+    .badge.open{background:#dcfce7;color:#15803d}
+    .badge.closed{background:#fee2e2;color:#b91c1c}
+    .badge.unknown{background:#f3f4f6;color:#6b7280}
+    .pp-actions{display:flex;gap:10px;padding:10px 18px 16px}
+    .btn{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:12px;
+      padding:13px;font-size:15px;font-weight:700}
+    .btn-primary{background:var(--brand);color:#fff}
+    .btn-primary:hover{background:var(--brand-d)}
+    .btn-secondary{background:#f3f4f6;color:var(--ink);flex:0 0 auto;padding:13px 18px}
+    .btn .lucide{width:17px;height:17px}
+
+    /* ---------- Navigation ---------- */
+    .nav-top{position:absolute;top:14px;left:14px;right:14px;z-index:40;background:var(--brand);color:#fff;
+      border-radius:14px;box-shadow:var(--shadow);padding:14px 16px;display:none;gap:14px;align-items:center}
+    .nav-top.show{display:flex}
+    .nav-top .lucide{width:30px;height:30px;flex:0 0 auto}
+    .nav-instr{font-size:17px;font-weight:700;line-height:1.2}
+    .nav-dist{font-size:13px;opacity:.9;margin-top:2px}
+    .nav-bottom{position:absolute;left:0;right:0;bottom:0;z-index:40;background:var(--panel);
+      box-shadow:0 -6px 30px rgba(2,6,23,.2);padding:14px 18px;display:none;align-items:center;gap:14px}
+    .nav-bottom.show{display:flex}
+    .nav-eta{font-size:22px;font-weight:800}
+    .nav-meta{font-size:13px;color:var(--muted)}
+    .nav-stop{margin-left:auto;background:#fee2e2;color:#b91c1c;border:0;border-radius:12px;
+      padding:12px 18px;font-weight:700;display:flex;align-items:center;gap:7px}
+
+    /* ---------- Route preview chooser ---------- */
+    .route-choose{position:absolute;left:0;right:0;bottom:0;z-index:35;background:var(--panel);
+      border-radius:18px 18px 0 0;box-shadow:0 -6px 30px rgba(2,6,23,.22);padding:14px 18px 18px;display:none}
+    .route-choose.show{display:block}
+    .rc-title{font-size:16px;font-weight:700;margin:0 0 10px}
+    .rc-opt{display:flex;align-items:center;gap:12px;padding:11px;border:1.5px solid var(--line);
+      border-radius:12px;margin-bottom:8px;cursor:pointer}
+    .rc-opt.sel{border-color:var(--brand);background:#eff6ff}
+    .rc-opt .lucide{color:var(--brand)}
+    .rc-main{font-size:15px;font-weight:700}
+    .rc-meta{font-size:12px;color:var(--muted)}
+    .rc-go{width:100%;margin-top:4px}
+    /* origine libre + profils transport */
+    .rc-endpoints{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+    .rc-ep{display:flex;align-items:center;gap:10px;border:1.5px solid var(--line);border-radius:12px;padding:9px 11px}
+    .rc-ep .lucide{flex:0 0 auto;width:18px;height:18px;color:var(--brand)}
+    .rc-ep.dest .lucide{color:var(--accent)}
+    .rc-ep-txt{min-width:0;flex:1}
+    .rc-ep-lbl{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+    .rc-ep-val{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .rc-ep-btn{border:0;background:#f3f4f6;color:var(--brand);width:32px;height:32px;border-radius:8px;
+      display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+    .rc-ep-btn+.rc-ep-btn{margin-left:4px}
+    .rc-ep-btn:hover{background:#e5edff}
+    .rc-ep-btn.on{background:var(--brand);color:#fff}
+    .rc-origin-search{display:none;margin-top:6px}
+    .rc-origin-search.show{display:block}
+    .rc-origin-search input{width:100%;border:1.5px solid var(--brand);border-radius:10px;padding:9px 11px;font-size:14px;outline:0}
+    .rc-origin-results{margin-top:4px;max-height:140px;overflow-y:auto}
+    .rc-profiles{display:flex;gap:8px;margin-bottom:12px}
+    .rc-prof{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;border:1.5px solid var(--line);
+      border-radius:12px;padding:9px 4px;font-size:11px;font-weight:600;color:var(--muted);background:var(--panel)}
+    .rc-prof .lucide{width:20px;height:20px}
+    .rc-prof.sel{border-color:var(--brand);background:#eff6ff;color:var(--brand)}
+    .rc-hint{font-size:12px;color:var(--muted);margin:-4px 0 10px}
+
+    /* ---------- Status bar + toast ---------- */
+    .statbar{position:absolute;left:14px;right:64px;bottom:16px;z-index:15;display:flex;gap:14px;align-items:center;
+      background:rgba(15,23,32,.86);color:#fff;border-radius:999px;padding:8px 16px;font-size:12px;
+      backdrop-filter:blur(6px);overflow-x:auto;scrollbar-width:none;white-space:nowrap}
+    .statbar::-webkit-scrollbar{display:none}
+    .statbar>span{flex:0 0 auto}
+    .statbar .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(22,163,74,.25);flex:0 0 auto}
+    .statbar b{color:#fff}
+    .toast{position:absolute;left:50%;top:80px;transform:translateX(-50%) translateY(-20px);z-index:60;
+      background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;
+      opacity:0;pointer-events:none;transition:.25s;box-shadow:var(--shadow)}
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+    .fab-locate{position:absolute;right:14px;bottom:56px;z-index:15;width:44px;height:44px;border-radius:50%;
+      background:var(--panel);box-shadow:var(--shadow);border:0;display:flex;align-items:center;justify-content:center;color:var(--brand)}
+    .maplibregl-ctrl-attrib{font-size:10px}
+    /* Compas custom : sous les contrôles de vue, à droite */
+    .compass-ctrl{position:absolute;right:14px;top:250px;z-index:15;display:flex;flex-direction:column;
+      align-items:center;gap:6px;background:var(--panel);border-radius:12px;box-shadow:var(--shadow);padding:6px}
+    .compass-btn{border:0;background:transparent;width:40px;height:40px;border-radius:9px;display:flex;
+      align-items:center;justify-content:center;padding:0}
+    .compass-btn:hover{background:#f3f4f6}
+    #compass-needle{transition:transform .2s ease-out;transform-origin:50% 50%}
+    .compass-cardinals{display:grid;grid-template-columns:1fr 1fr;gap:3px;width:100%}
+    .compass-cardinals button{border:0;background:#f3f4f6;color:var(--ink);border-radius:6px;font-size:11px;
+      font-weight:700;padding:4px 0;line-height:1}
+    .compass-cardinals button:hover{background:var(--brand);color:#fff}
+    @media(max-width:480px){.search-wrap{max-width:none}.view-controls{top:120px}.compass-ctrl{top:240px}}
   </style>
 </head>
 <body>
-<div id="map"></div>
+  <div id="map"></div>
 
-<!-- Recherche -->
-<div class="search-wrap">
-  <div class="search-box">
-    <span class="mn-logo">🗺️</span>
-    <input id="q" type="text" placeholder="Rechercher un lieu, une adresse…" autocomplete="off" />
-    <span class="ic" id="q-clear" title="Effacer">✕</span>
-    <span class="ic" id="q-go" title="Rechercher">🔍</span>
+  <!-- Search -->
+  <div class="search-wrap">
+    <div class="search-box">
+      <span class="brand"><i data-lucide="map-pin" class="lucide" width="22" height="22"></i></span>
+      <input id="q" type="text" placeholder="Rechercher un lieu, un quartier, un service…"
+             autocomplete="off" spellcheck="false" enterkeyhint="search">
+      <button id="q-clear" class="iconbtn" title="Effacer"><i data-lucide="x" class="lucide" width="18" height="18"></i></button>
+      <button id="q-go" class="iconbtn" title="Rechercher"><i data-lucide="search" class="lucide" width="18" height="18"></i></button>
+    </div>
+    <div id="results" class="results"></div>
   </div>
-  <div class="search-results" id="results"></div>
-  <select class="neighborhood-filter" id="neighborhood-filter" aria-label="Filtrer par quartier">
-    <option value="">Tous les quartiers</option>
-  </select>
-</div>
 
-<!-- Contrôles haut droite : couches -->
-<div class="ctrl top">
-  <button class="fab" id="btn-layer" title="Changer de fond">🛰️</button>
-</div>
+  <!-- Category chips -->
+  <div id="chips" class="chips"></div>
 
-<!-- Contrôles bas droite : ma position, zoom -->
-<div class="ctrl bot">
-  <button class="fab" id="btn-add" title="Créer une capture ici">➕</button>
-  <button class="fab accent" id="btn-locate" title="Ma position">📍</button>
-</div>
-
-<!-- Bandeau itinéraire -->
-<div class="route-info" id="route-info"></div>
-
-<!-- Itinéraire par noms de lieux : départ -> destination -->
-<div class="route-names" id="route-names" style="position:absolute;left:12px;top:118px;z-index:900;background:rgba(15,23,42,.92);border-radius:12px;padding:10px;width:280px;color:#e2e8f0;font-size:13px;backdrop-filter:blur(6px)">
-  <div style="font-weight:700;margin-bottom:6px">🧭 Itinéraire par noms</div>
-  <input id="rn-from" type="text" placeholder="Départ (ex: Carrefour Nsam)" autocomplete="off"
-         style="width:100%;box-sizing:border-box;margin-bottom:6px;padding:7px 9px;border-radius:8px;border:1px solid #334155;background:#0b1220;color:#e2e8f0" />
-  <input id="rn-to" type="text" placeholder="Destination (ex: Marché Mokolo)" autocomplete="off"
-         style="width:100%;box-sizing:border-box;margin-bottom:8px;padding:7px 9px;border-radius:8px;border:1px solid #334155;background:#0b1220;color:#e2e8f0" />
-  <div style="display:flex;gap:6px">
-    <button id="rn-go" style="flex:1;background:#1a73e8;color:#fff;border:0;border-radius:8px;padding:7px;cursor:pointer;font-weight:600">Calculer</button>
-    <button id="rn-clear" style="background:#334155;color:#fff;border:0;border-radius:8px;padding:7px 10px;cursor:pointer">✕</button>
+  <!-- View controls -->
+  <div class="view-controls">
+    <button id="btn-2d" class="view-btn active" title="Vue 2D" onclick="setView('2d')"><i data-lucide="square" class="lucide" width="20" height="20"></i></button>
+    <button id="btn-3d" class="view-btn" title="Vue 3D" onclick="setView('3d')"><i data-lucide="box" class="lucide" width="20" height="20"></i></button>
+    <button id="btn-sat" class="view-btn" title="Satellite" onclick="toggleSatellite()"><i data-lucide="satellite" class="lucide" width="20" height="20"></i></button>
   </div>
-</div>
 
-<!-- Barre de stats live -->
-<div class="statbar" id="statbar">
-  <span><span class="dot"></span>LIVE</span>
-  <span>Captures <b id="s-total">–</b></span>
-  <span>Trust <b id="s-trust">–</b></span>
-  <span>Agents <b id="s-agents">1</b></span>
-</div>
-
-<!-- Panneau détails d'un point -->
-<div class="sheet" id="sheet">
-  <h3 id="sh-title">—</h3>
-  <div class="meta" id="sh-meta"></div>
-  <div class="row">
-    <button id="sh-route">🧭 Itinéraire</button>
-    <button class="sec" id="sh-close">Fermer</button>
+  <!-- Compas / orientation (custom, fiable) : clic = remettre le nord.
+       Molette/glisser-droit fait pivoter la carte ; l'aiguille suit le bearing. -->
+  <div class="compass-ctrl">
+    <button id="btn-compass" class="compass-btn" title="Remettre au nord" onclick="resetNorth()">
+      <svg id="compass-needle" viewBox="0 0 40 40" width="34" height="34" aria-hidden="true">
+        <circle cx="20" cy="20" r="18" fill="#fff" stroke="#e5e7eb" stroke-width="1"/>
+        <polygon points="20,5 25,21 20,18 15,21" fill="#ef4444"/>
+        <polygon points="20,35 25,19 20,22 15,19" fill="#64748b"/>
+        <text x="20" y="12" text-anchor="middle" font-size="7" font-weight="700" fill="#ef4444">N</text>
+      </svg>
+    </button>
+    <div class="compass-cardinals">
+      <button title="Nord"  onclick="orientTo(0)">N</button>
+      <button title="Est"   onclick="orientTo(90)">E</button>
+      <button title="Sud"   onclick="orientTo(180)">S</button>
+      <button title="Ouest" onclick="orientTo(270)">O</button>
+    </div>
   </div>
-</div>
 
-<div class="toast" id="toast"></div>
+  <!-- Zoom -->
+  <div class="zoom-controls">
+    <button onclick="map.zoomIn()" aria-label="Zoom avant">+</button>
+    <button onclick="map.zoomOut()" aria-label="Zoom arrière">−</button>
+  </div>
+  <button class="fab-locate" title="Ma position" onclick="locateMe()"><i data-lucide="locate-fixed" class="lucide" width="20" height="20"></i></button>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<script>
-const KIND_ICON={road_condition:"⚠️",gps:"📡",poi:"📍",voice:"🎙️",photo:"📷"};
-const STATE_COLOR={NEW:"#9aa0a6",LOCAL:"#1a73e8",ENCRYPTED:"#fbbc04",MESH_SHARED:"#bc8cff",GATEWAY_UPLOADED:"#f778ba",SERVER_CONFIRMED:"#34a853",ARCHIVED:"#6e7681"};
-const YAOUNDE=[3.8480,11.5021];
+  <!-- Place panel -->
+  <div id="place-panel" class="place-panel">
+    <div class="grip"></div>
+    <div class="pp-head">
+      <div id="pp-ico" class="pp-ico"><i data-lucide="map-pin" class="lucide" width="24" height="24"></i></div>
+      <div style="min-width:0">
+        <h2 id="pp-title" class="pp-title">—</h2>
+        <p id="pp-sub" class="pp-sub">—</p>
+      </div>
+      <button class="pp-close" onclick="closePlacePanel()" aria-label="Fermer"><i data-lucide="x" class="lucide" width="18" height="18"></i></button>
+    </div>
+    <div id="pp-body" class="pp-body"></div>
+    <div class="pp-actions">
+      <button class="btn btn-primary" onclick="planRouteToCurrent()"><i data-lucide="navigation" class="lucide" width="17" height="17"></i> Itinéraire</button>
+      <button class="btn btn-secondary" onclick="closePlacePanel()">Fermer</button>
+    </div>
+  </div>
 
-let map, cluster, meMarker=null, meCircle=null, selected=null, routeLine=null, pickMode=false;
-let neighborhoodFilter='';
-const layers={};
-let curLayer='streets';
+  <!-- Route chooser : origine libre + profils transport -->
+  <div id="route-choose" class="route-choose">
+    <p class="rc-title">Itinéraire</p>
 
-function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),2200);}
+    <!-- Points de départ / arrivée -->
+    <div class="rc-endpoints">
+      <div class="rc-ep origin">
+        <i data-lucide="circle-dot" class="lucide"></i>
+        <div class="rc-ep-txt">
+          <div class="rc-ep-lbl">Origine</div>
+          <div id="rc-origin-val" class="rc-ep-val">Ma position (GPS)</div>
+        </div>
+        <button class="rc-ep-btn on" id="rc-o-gps" title="Ma position GPS" onclick="setOriginMode('gps')"><i data-lucide="locate-fixed" class="lucide" width="16" height="16"></i></button>
+        <button class="rc-ep-btn" id="rc-o-map" title="Choisir sur la carte" onclick="setOriginMode('map')"><i data-lucide="map-pin" class="lucide" width="16" height="16"></i></button>
+        <button class="rc-ep-btn" id="rc-o-search" title="Rechercher l'origine" onclick="setOriginMode('search')"><i data-lucide="search" class="lucide" width="16" height="16"></i></button>
+      </div>
+      <div id="rc-origin-search" class="rc-origin-search">
+        <input id="rc-origin-q" type="text" placeholder="Rechercher un lieu de départ…" autocomplete="off" spellcheck="false">
+        <div id="rc-origin-results" class="rc-origin-results results"></div>
+      </div>
+      <div class="rc-ep dest">
+        <i data-lucide="map-pin" class="lucide"></i>
+        <div class="rc-ep-txt">
+          <div class="rc-ep-lbl">Destination</div>
+          <div id="rc-dest-val" class="rc-ep-val">—</div>
+        </div>
+      </div>
+    </div>
 
-function initMap(){
-  map=L.map('map',{zoomControl:false}).setView(YAOUNDE,13);
-  layers.streets=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap · MapNet'});
-  layers.sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'© Esri · MapNet'});
-  layers.streets.addTo(map);
-  L.control.zoom({position:'bottomright'}).addTo(map);
-  cluster=L.markerClusterGroup({maxClusterRadius:45,showCoverageOnHover:false});
-  map.addLayer(cluster);
+    <!-- Profils de transport -->
+    <div class="rc-profiles" id="rc-profiles">
+      <button class="rc-prof sel" data-profile="pedestrian" onclick="setProfile('pedestrian')"><i data-lucide="footprints" class="lucide"></i>Piéton</button>
+      <button class="rc-prof" data-profile="auto" onclick="setProfile('auto')"><i data-lucide="car" class="lucide"></i>Voiture</button>
+      <button class="rc-prof" data-profile="motorcycle" onclick="setProfile('motorcycle')"><i data-lucide="bike" class="lucide"></i>Moto</button>
+      <button class="rc-prof" data-profile="taxi" onclick="setProfile('taxi')"><i data-lucide="car-taxi-front" class="lucide"></i>Taxi</button>
+    </div>
 
-  map.on('click',e=>{
-    if(pickMode){ createCapture(e.latlng); pickMode=false; document.getElementById('btn-add').classList.remove('accent'); }
-  });
-}
+    <div id="rc-hint" class="rc-hint"></div>
+    <div id="rc-list"></div>
+    <button class="btn btn-primary rc-go" id="rc-go" onclick="startNavigation()"><i data-lucide="navigation-2" class="lucide" width="17" height="17"></i> Démarrer</button>
+  </div>
 
-/* ---------- Captures (données live du serveur) ---------- */
-async function loadMap(){
-  try{
-    const gj=await (await fetch('/api/map.geojson')).json();
-    cluster.clearLayers();
-    const neighborhoods=new Set();
-    let agents=0;
-    (gj.features||[]).forEach(f=>{
-      const [lon,lat]=f.geometry.coordinates,p=f.properties||{};
-      if(p.feature_type==='device'){
-        agents++;
-        const state=p.is_online?'online':'offline';
-        const icon=L.divIcon({className:'',html:`<div class="agent-marker ${state}"></div>`,iconSize:[22,22],iconAnchor:[11,11]});
-        const marker=L.marker([lat,lon],{icon});
-        marker.bindPopup(`<b>${p.name||p.device_id}</b><br>${p.is_online?'En ligne':'Hors ligne'}<br>Dernier heartbeat: ${new Date((p.last_heartbeat_at||0)*1000).toLocaleString()}`);
-        cluster.addLayer(marker);
-        return;
-      }
-      if(p.neighborhood) neighborhoods.add(p.neighborhood);
-      if(neighborhoodFilter && p.neighborhood!==neighborhoodFilter)return;
-      const color=STATE_COLOR[p.state]||"#888";
-      const icon=L.divIcon({className:'',html:`<div style="font-size:22px;filter:drop-shadow(0 1px 2px #000)">${KIND_ICON[p.kind]||"📍"}</div>`,iconSize:[24,24],iconAnchor:[12,12]});
-      const marker=L.marker([lat,lon],{icon});
-      marker.on('click',()=>selectPoint(p,lat,lon,color));
-      cluster.addLayer(marker);
-    });
-    document.getElementById('s-agents').textContent=agents;
-    const select=document.getElementById('neighborhood-filter');
-    const values=[...neighborhoods].sort();
-    select.innerHTML='<option value="">Tous les quartiers</option>'+values.map(n=>`<option value="${n.replace(/"/g,'&quot;')}">${n}</option>`).join('');
-    select.value=neighborhoodFilter;
-  }catch(e){ toast('Serveur injoignable'); }
-}
-async function loadStats(){
-  try{
-    const s=await (await fetch('/api/stats')).json();
-    document.getElementById('s-total').textContent=s.total;
-    document.getElementById('s-trust').textContent=(s.avg_trust*100).toFixed(0)+'%';
-  }catch(e){}
-}
-function selectPoint(p,lat,lon,color){
-  selected={lat,lon,label:p.label||p.kind};
-  document.getElementById('sh-title').textContent=`${KIND_ICON[p.kind]||"📍"} ${p.label||p.kind}`;
-  document.getElementById('sh-meta').innerHTML=
-    `<span class="badge" style="color:${color}">${p.state}</span>`+
-    `<span class="badge">trust ${(p.trust_score*100).toFixed(0)}%</span>`+
-    `<span class="badge">${lat.toFixed(5)}, ${lon.toFixed(5)}</span>`+
-    (p.neighborhood?`<span class="badge">${p.neighborhood}</span>`:'')+
-    (p.flags&&p.flags.length?`<br>⚠️ ${p.flags.join(', ')}`:'');
-  document.getElementById('sheet').classList.add('on');
-  map.panTo([lat,lon]);
-}
-document.getElementById('sh-close').onclick=()=>document.getElementById('sheet').classList.remove('on');
+  <!-- Navigation overlays -->
+  <div id="nav-top" class="nav-top">
+    <i id="nav-icon" data-lucide="corner-up-right" class="lucide"></i>
+    <div><div id="nav-instr" class="nav-instr">—</div><div id="nav-dist" class="nav-dist">—</div></div>
+  </div>
+  <div id="nav-bottom" class="nav-bottom">
+    <div><div id="nav-eta" class="nav-eta">—</div><div id="nav-meta" class="nav-meta">—</div></div>
+    <button class="nav-stop" onclick="stopNavigation()"><i data-lucide="x" class="lucide" width="16" height="16"></i> Arrêter</button>
+  </div>
 
-/* ---------- Géolocalisation navigateur ---------- */
-function locateMe(){
-  if(!navigator.geolocation){toast('Géolocalisation non supportée');return;}
-  toast('Localisation…');
-  navigator.geolocation.getCurrentPosition(pos=>{
-    const {latitude:lat,longitude:lon,accuracy}=pos.coords;
-    if(meMarker)map.removeLayer(meMarker); if(meCircle)map.removeLayer(meCircle);
-    meCircle=L.circle([lat,lon],{radius:accuracy,color:'#1a73e8',fillColor:'#1a73e8',fillOpacity:.12,weight:1}).addTo(map);
-    meMarker=L.marker([lat,lon],{icon:L.divIcon({className:'',html:'<div style="width:16px;height:16px;background:#1a73e8;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 2px #1a73e8"></div>',iconSize:[16,16],iconAnchor:[8,8]})}).addTo(map);
-    map.setView([lat,lon],16);
-    toast(`Position ±${accuracy.toFixed(0)} m`);
-  },err=>toast('Position refusée'),{enableHighAccuracy:true,timeout:10000});
-}
-document.getElementById('btn-locate').onclick=locateMe;
+  <!-- Status bar : compteurs réels par couche (PostGIS) -->
+  <div class="statbar">
+    <span class="dot"></span><b>LIVE</b>
+    <span title="POI indexés (raw_places)">POI indexés <b id="s-places">—</b></span>
+    <span title="Bâtiments (mapnet_buildings)">Bâtiments <b id="s-buildings">—</b></span>
+    <span title="Segments de route (mapnet_edges)">Routes <b id="s-roads">—</b></span>
+    <span title="Quartiers & divisions (mapnet_divisions)">Quartiers <b id="s-districts">—</b></span>
+    <span title="Captures terrain">Captures <b id="s-caps">0</b></span>
+    <span title="Agents actifs">Agents <b id="s-agents">0</b></span>
+  </div>
 
-/* ---------- Recherche géocodée (Nominatim) ---------- */
-let searchTimer=null;
-async function search(q){
-  if(!q||q.length<3){document.getElementById('results').classList.remove('on');return;}
-  try{
-    const url=`https://nominatim.openstreetmap.org/search?format=json&limit=6&q=${encodeURIComponent(q)}`;
-    const r=await (await fetch(url,{headers:{'Accept-Language':'fr'}})).json();
-    const box=document.getElementById('results');
-    if(!r.length){box.innerHTML='<div class="sr-item">Aucun résultat</div>';box.classList.add('on');return;}
-    box.innerHTML=r.map(x=>`<div class="sr-item" data-lat="${x.lat}" data-lon="${x.lon}"><span class="pin">📍</span><div>${x.display_name.split(',')[0]}<small>${x.display_name}</small></div></div>`).join('');
-    box.classList.add('on');
-    box.querySelectorAll('.sr-item').forEach(el=>{
-      if(!el.dataset.lat)return;
-      el.onclick=()=>{
-        const lat=+el.dataset.lat,lon=+el.dataset.lon;
-        map.setView([lat,lon],16);
-        L.popup().setLatLng([lat,lon]).setContent(el.querySelector('div').firstChild.textContent).openOn(map);
-        box.classList.remove('on');
-        selected={lat,lon,label:el.querySelector('div').firstChild.textContent};
-      };
-    });
-  }catch(e){toast('Recherche indisponible');}
-}
-document.getElementById('q').addEventListener('input',e=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>search(e.target.value),450);});
-document.getElementById('q-go').onclick=()=>search(document.getElementById('q').value);
-document.getElementById('q-clear').onclick=()=>{document.getElementById('q').value='';document.getElementById('results').classList.remove('on');};
-document.getElementById('neighborhood-filter').onchange=e=>{neighborhoodFilter=e.target.value;loadMap();};
+  <div id="toast" class="toast"></div>
 
-/* ---------- Itinéraire (routing LOCAL 8093, alternatives + badges) ---------- */
-let routeLayers=[];
-const ROUTE_COLORS=['#1a73e8','#34a853','#fbbc04','#9c27b0'];
-function clearRoutes(){routeLayers.forEach(l=>map.removeLayer(l));routeLayers=[];if(routeLine){map.removeLayer(routeLine);routeLine=null;}}
-function badgeHtml(b){
-  let s='';
-  if(b.has_unpaved)s+='<span style="background:#fbbc04;color:#000;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">piste non bitumée</span>';
-  if(b.has_construction)s+='<span style="background:#ea4335;color:#fff;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">chantier</span>';
-  if(b.secondary_m>0)s+='<span style="background:#5f6368;color:#fff;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">secondaire '+(b.secondary_m/1000).toFixed(1)+' km</span>';
-  if(!s)s='<span style="background:#34a853;color:#fff;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">voie praticable</span>';
-  return s;
-}
-async function routeTo(lat,lon){
-  if(!meMarker){toast("Activez d'abord votre position");return;}
-  const from=meMarker.getLatLng();
-  toast('Calcul des itinéraires…');
-  try{
-    const r=await (await fetch('/api/routing/alternatives',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({from_lat:from.lat,from_lon:from.lng,to_lat:lat,to_lon:lon,count:4})})).json();
-    if(!r.routes||!r.routes.length){toast('Aucun itinéraire');return;}
-    clearRoutes();
-    const ri=document.getElementById('route-info');
-    ri.innerHTML='';
-    r.routes.forEach((rt,idx)=>{
-      const color=ROUTE_COLORS[idx%ROUTE_COLORS.length];
-      const layer=L.geoJSON(rt.geometry,{style:{color:color,weight:idx===0?6:4,opacity:idx===0?.9:.55}}).addTo(map);
-      routeLayers.push(layer);
-      const km=(rt.distance/1000).toFixed(1),min=Math.round(rt.duration/60);
-      const div=document.createElement('div');
-      div.style.cssText='padding:4px 2px;cursor:pointer;';
-      div.innerHTML='<b style="color:'+color+'">●</b> 🚗 '+km+' km · '+min+' min '+badgeHtml(rt.badges||{});
-      div.onclick=()=>{routeLayers.forEach((l,k)=>l.setStyle({weight:k===idx?6:4,opacity:k===idx?.9:.55}));map.fitBounds(layer.getBounds(),{padding:[60,60]});};
-      ri.appendChild(div);
-    });
-    map.fitBounds(routeLayers[0].getBounds(),{padding:[60,60]});
-    ri.classList.add('on');
-  }catch(e){toast('Routage indisponible');}
-}
-document.getElementById('sh-route').onclick=()=>{if(selected)routeTo(selected.lat,selected.lon);};
-
-/* ---------- Itinéraire par NOMS de lieux (départ -> destination) ---------- */
-function cardinalBadge(rt){
-  return (rt.cardinal&&rt.cardinal.bearing)
-    ?'<span style="background:#0e7490;color:#fff;border-radius:8px;padding:1px 7px;font-size:11px;margin-left:4px">➤ '+rt.cardinal.bearing+'</span>':'';
-}
-function stepsHtml(steps){
-  if(!steps||!steps.length)return'';
-  return '<div style="margin:4px 0 2px 14px;font-size:12px;color:#cbd5e1">'+steps.map(s=>{
-    const rp=(s.maneuver==='roundabout'||s.maneuver==='rotary');
-    const dist=s.distance?' — '+(s.distance/1000).toFixed(1)+' km':'';
-    return '<div style="padding:1px 0;'+(rp?'color:#f59e0b;font-weight:600':'')+'">'+(rp?'⟳':'•')+' '+s.instruction+dist+'</div>';
-  }).join('')+'</div>';
-}
-function renderRouteAlternatives(r){
-  clearRoutes();
-  const ri=document.getElementById('route-info');
-  ri.innerHTML='';
-  if(r.resolved){
-    const head=document.createElement('div');
-    head.style.cssText='padding:2px 2px 6px;font-size:12px;color:#94a3b8';
-    head.textContent='📍 '+r.resolved.from.name.split(',')[0]+' → '+r.resolved.to.name.split(',')[0];
-    ri.appendChild(head);
-  }
-  r.routes.forEach((rt,idx)=>{
-    const color=ROUTE_COLORS[idx%ROUTE_COLORS.length];
-    const layer=L.geoJSON(rt.geometry,{style:{color:color,weight:idx===0?6:4,opacity:idx===0?.9:.55}}).addTo(map);
-    routeLayers.push(layer);
-    const km=(rt.distance/1000).toFixed(1),min=Math.round(rt.duration/60);
-    const div=document.createElement('div');
-    div.style.cssText='padding:4px 2px;cursor:pointer;';
-    div.innerHTML='<b style="color:'+color+'">●</b> 🚗 '+km+' km · '+min+' min '+cardinalBadge(rt)+' '+badgeHtml(rt.badges||{});
-    div.onclick=()=>{
-      routeLayers.forEach((l,k)=>l.setStyle({weight:k===idx?6:4,opacity:k===idx?.9:.55}));
-      map.fitBounds(layer.getBounds(),{padding:[60,60]});
-      ri.querySelectorAll('.rn-steps').forEach(e=>e.remove());
-      const st=document.createElement('div');st.className='rn-steps';st.innerHTML=stepsHtml(rt.steps);
-      div.after(st);
-    };
-    ri.appendChild(div);
-  });
-  map.fitBounds(routeLayers[0].getBounds(),{padding:[60,60]});
-  ri.classList.add('on');
-}
-async function routeByNames(){
-  const fromName=document.getElementById('rn-from').value.trim();
-  const toName=document.getElementById('rn-to').value.trim();
-  if(!fromName||!toName){toast('Saisissez départ ET destination');return;}
-  toast('Géocodage + calcul des itinéraires…');
-  try{
-    const r=await (await fetch('/api/routing/by_names',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({from_name:fromName,to_name:toName,count:4})})).json();
-    if(r.error){toast(r.error==='origin_not_found'?'Départ introuvable':(r.error==='destination_not_found'?'Destination introuvable':'Routage indisponible'));return;}
-    if(!r.routes||!r.routes.length){toast('Aucun itinéraire');return;}
-    renderRouteAlternatives(r);
-    toast('Itinéraires calculés ✓');
-  }catch(e){toast('Routage indisponible');}
-}
-document.getElementById('rn-go').onclick=routeByNames;
-document.getElementById('rn-clear').onclick=()=>{
-  document.getElementById('rn-from').value='';document.getElementById('rn-to').value='';
-  clearRoutes();document.getElementById('route-info').classList.remove('on');
-};
-
-/* ---------- Créer une capture ---------- */
-document.getElementById('btn-add').onclick=()=>{
-  pickMode=!pickMode;
-  document.getElementById('btn-add').classList.toggle('accent',pickMode);
-  toast(pickMode?'Cliquez sur la carte pour placer le point':'Annulé');
-};
-async function createCapture(ll){
-  try{
-    await fetch('/api/captures',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({lat:ll.lat,lon:ll.lng,kind:'poi',label:'Point web',
-        signals:{accuracy_m:5,source:'web_dashboard'}})});
-    toast('Capture créée ✓');
-    await refresh();
-  }catch(e){toast('Échec création');}
-}
-
-/* ---------- Couches ---------- */
-document.getElementById('btn-layer').onclick=()=>{
-  if(curLayer==='streets'){map.removeLayer(layers.streets);layers.sat.addTo(map);curLayer='sat';document.getElementById('btn-layer').textContent='🗺️';}
-  else{map.removeLayer(layers.sat);layers.streets.addTo(map);curLayer='streets';document.getElementById('btn-layer').textContent='🛰️';}
-};
-
-async function refresh(){await Promise.all([loadMap(),loadStats()]);}
-initMap();refresh();setInterval(refresh,12000);
-</script>
+  <script src="/app.js"></script>
 </body>
 </html>

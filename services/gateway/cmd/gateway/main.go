@@ -14,6 +14,7 @@
 //	/api/map/*        -> map-engine    (edges + versioned sync)
 //	/api/route/*      -> routing       (itineraries: route, nearest, map-match)
 //	/api/v1/places/*  -> places        (search, building-at, nearest-district, categories, status)
+//	/tiles/*          -> pg_tileserv   (PostGIS vector tiles: buildings, POIs, roads, districts)
 //	/health           -> gateway liveness
 package main
 
@@ -109,6 +110,7 @@ func main() {
 	mapTarget := env("MAP_ENGINE_URL", "http://localhost:8082")
 	routeTarget := env("ROUTING_URL", "http://localhost:8093")
 	placesTarget := env("PLACES_URL", "http://localhost:8083")
+	tilesTarget := env("TILES_URL", "http://localhost:7800")
 
 	gpsProxy, err := newProxy(gpsTarget, "/api/gps")
 	if err != nil {
@@ -128,12 +130,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("places proxy: %v", err)
 	}
+	// pg_tileserv serves vector tiles at /public.<table>/{z}/{x}/{y}.pbf, so we
+	// strip the /tiles prefix before proxying.
+	tilesProxy, err := newProxy(tilesTarget, "/tiles")
+	if err != nil {
+		log.Fatalf("tiles proxy: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/gps/", gpsProxy)
 	mux.Handle("/api/map/", mapProxy)
 	mux.Handle("/api/route/", routeProxy)
 	mux.Handle("/api/v1/places/", placesProxy)
+	mux.Handle("/tiles/", tilesProxy)
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -155,7 +164,7 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("gateway listening on :%s (gps=%s map=%s route=%s places=%s static=%s)", port, gpsTarget, mapTarget, routeTarget, placesTarget, staticDir)
+	log.Printf("gateway listening on :%s (gps=%s map=%s route=%s places=%s tiles=%s static=%s)", port, gpsTarget, mapTarget, routeTarget, placesTarget, tilesTarget, staticDir)
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("listen: %v", err)

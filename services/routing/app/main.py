@@ -323,8 +323,18 @@ def _named_steps(route_obj, max_steps=12):
 # ---------------------------------------------------------------------------
 
 
+# Correspondance profil UI -> costing Valhalla réel.
+_COSTING_MAP = {
+    "pedestrian": "pedestrian", "foot": "pedestrian", "walk": "pedestrian",
+    "auto": "auto", "car": "auto", "driving": "auto",
+    "motorcycle": "motorcycle", "moto": "motorcycle",
+    "taxi": "taxi",
+    "bicycle": "bicycle", "bike": "bicycle",
+}
+
+
 @app.post("/api/v1/routing/alternatives")
-def alternatives(req: RouteRequest, count: int = 4):
+def alternatives(req: RouteRequest, count: int = 4, costing: str = "auto"):
     """Return up to `count` (default 4) itineraries with surface badges.
 
     Response shape:
@@ -345,13 +355,41 @@ def alternatives(req: RouteRequest, count: int = 4):
     }
     """
     n = max(1, min(int(count), 4))
+    val_costing = _COSTING_MAP.get((costing or "auto").lower(), "auto")
+    used_engine = "osrm"
+    used_costing = val_costing
     try:
-        data = route_alternatives(
-            req.from_lat, req.from_lon, req.to_lat, req.to_lon, count=n
-        )
+        # VRAI profil de routage :
+        #  - auto/taxi -> OSRM driving (moteur historique, itinéraires véhicule)
+        #  - pedestrian/motorcycle/bicycle -> Valhalla local avec costing réel
+        # Ne jamais présenter une route voiture comme piéton/moto : le moteur
+        # calcule des géométries et des durées propres au mode.
+        if val_costing in ("pedestrian", "motorcycle", "bicycle") and valhalla_client.available():
+            data = valhalla_client.route_alternatives_costed(
+                req.from_lat, req.from_lon, req.to_lat, req.to_lon,
+                count=n, costing=val_costing)
+            used_engine = "valhalla"
+        elif val_costing == "taxi" and valhalla_client.available():
+            # taxi = profil voiture Valhalla (contraintes taxi) ; sinon OSRM.
+            data = valhalla_client.route_alternatives_costed(
+                req.from_lat, req.from_lon, req.to_lat, req.to_lon,
+                count=n, costing="taxi")
+            used_engine = "valhalla"
+        else:
+            data = route_alternatives(
+                req.from_lat, req.from_lon, req.to_lat, req.to_lon, count=n)
+            used_engine = "osrm"
+            used_costing = "auto"
     except Exception as exc:
-        logger.error("Alternatives routing failed: %s", exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        logger.error("Alternatives routing failed (%s/%s): %s", used_engine, val_costing, exc)
+        # Repli robuste sur OSRM driving pour ne jamais casser l'itinéraire.
+        try:
+            data = route_alternatives(
+                req.from_lat, req.from_lon, req.to_lat, req.to_lon, count=n)
+            used_engine = "osrm-fallback"
+            used_costing = "auto"
+        except Exception as exc2:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc2)) from exc2
 
     routes = data.get("routes", [])
     if not routes:
@@ -362,17 +400,32 @@ def alternatives(req: RouteRequest, count: int = 4):
     out = []
     for i, r in enumerate(routes, start=1):
         geom = r.get("geometry", {})
+        # Valhalla fournit déjà distance/duration/steps ; OSRM passe par les helpers.
+        if used_engine.startswith("valhalla"):
+            badges = {"secondary_m": 0.0, "unpaved_m": 0.0, "construction_m": 0.0,
+                      "has_unpaved": False, "has_construction": False}
+            steps = r.get("steps", [])
+        else:
+            try:
+                badges = annotate_route_surfaces(r)
+            except Exception:  # pragma: no cover
+                badges = {}
+            try:
+                steps = _named_steps(r)
+            except Exception:  # pragma: no cover
+                steps = []
         out.append({
             "rank": i,
             "distance": r.get("distance", 0.0),
             "duration": r.get("duration", 0.0),
             "geometry": geom,
-            "badges": annotate_route_surfaces(r),
+            "badges": badges,
             "cardinal": _route_cardinality(geom),
-            "steps": _named_steps(r),
+            "steps": steps,
         })
 
-    return {"status": "ok", "count": len(out), "routes": out}
+    return {"status": "ok", "count": len(out), "engine": used_engine,
+            "costing": used_costing, "routes": out}
 
 
 # ---------------------------------------------------------------------------

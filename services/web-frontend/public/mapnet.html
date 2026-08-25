@@ -16,7 +16,7 @@
   * { box-sizing: border-box; }
   html,body { margin:0; height:100%; font-family: system-ui, sans-serif; }
   #app { display:flex; height:100%; }
-  #map { flex:1; }
+  #map { flex:1; position:relative; }
   #panel { width:340px; background:#0f172a; color:#e2e8f0; padding:14px; overflow-y:auto; }
   h1 { font-size:16px; margin:0 0 10px; color:#38bdf8; }
   h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:#94a3b8; margin:16px 0 6px; }
@@ -28,11 +28,75 @@
   pre { background:#020617; padding:8px; border-radius:6px; font-size:11px; max-height:180px; overflow:auto; white-space:pre-wrap; }
   .ok { color:#4ade80; } .err { color:#f87171; }
   .row { display:flex; gap:6px; } .row button { flex:1; }
+
+  /* ── Event-driven search + places UI ─────────────────────────────── */
+  #searchWrap { position:absolute; top:12px; left:12px; z-index:5; width:360px; max-width:calc(100% - 24px); }
+  #searchBox { width:100%; padding:11px 14px; border-radius:10px; border:1px solid #cbd5e1;
+    box-shadow:0 2px 10px rgba(0,0,0,.18); font-size:15px; background:#fff; color:#0f172a; }
+  #suggest { background:#fff; color:#0f172a; border-radius:10px; margin-top:6px; overflow:hidden;
+    box-shadow:0 6px 22px rgba(0,0,0,.22); display:none; max-height:60vh; overflow-y:auto; }
+  #suggest .grp { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#64748b;
+    padding:8px 14px 4px; background:#f1f5f9; }
+  #suggest .item { padding:9px 14px; cursor:pointer; display:flex; gap:10px; align-items:center; border-top:1px solid #f1f5f9; }
+  #suggest .item:hover, #suggest .item.active { background:#e0f2fe; }
+  #suggest .item .ic { font-size:18px; width:22px; text-align:center; }
+  #suggest .item .tx { flex:1; min-width:0; }
+  #suggest .item .tx .nm { font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #suggest .item .tx .sub { font-size:12px; color:#64748b; }
+
+  #catBar { position:absolute; top:64px; left:12px; z-index:4; display:flex; gap:6px; flex-wrap:wrap; width:360px; max-width:calc(100% - 24px); }
+  #catBar .chip { background:#fff; color:#0f172a; border:1px solid #cbd5e1; border-radius:18px;
+    padding:5px 11px; font-size:12px; cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,.12); white-space:nowrap; }
+  #catBar .chip.active { background:#2563eb; color:#fff; border-color:#2563eb; }
+
+  #infoCard { position:absolute; bottom:18px; left:12px; z-index:6; width:320px; max-width:calc(100% - 24px);
+    background:#fff; color:#0f172a; border-radius:14px; box-shadow:0 8px 30px rgba(0,0,0,.28); display:none; overflow:hidden; }
+  #infoCard .hd { padding:14px 16px 10px; }
+  #infoCard .hd .title { font-size:17px; font-weight:700; }
+  #infoCard .hd .cat { font-size:13px; color:#475569; margin-top:2px; }
+  #infoCard .body { padding:0 16px 12px; font-size:13px; color:#334155; }
+  #infoCard .body .line { padding:3px 0; }
+  #infoCard .status { display:inline-block; padding:2px 9px; border-radius:12px; font-size:12px; font-weight:600; margin-top:6px; }
+  #infoCard .status.open { background:#dcfce7; color:#166534; }
+  #infoCard .status.closed { background:#fee2e2; color:#991b1b; }
+  #infoCard .status.unknown { background:#e2e8f0; color:#475569; }
+  #infoCard .acts { display:flex; gap:8px; padding:10px 16px 14px; border-top:1px solid #f1f5f9; }
+  #infoCard .acts button { flex:1; }
+  #infoCard .close { position:absolute; top:8px; right:10px; cursor:pointer; color:#94a3b8; font-size:20px; background:none; padding:0; width:24px; }
+
+  #viewCtl { position:absolute; top:12px; right:60px; z-index:4; display:flex; gap:6px; }
+  #viewCtl button { background:#fff; color:#0f172a; border:1px solid #cbd5e1; border-radius:8px; padding:6px 10px;
+    font-size:12px; box-shadow:0 1px 4px rgba(0,0,0,.14); }
+  #viewCtl button.active { background:#0f172a; color:#fff; border-color:#0f172a; }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="map"></div>
+  <div id="map">
+    <!-- Event-driven search (debounced, no page reload) -->
+    <div id="searchWrap">
+      <input id="searchBox" type="text" placeholder="Rechercher un quartier, lieu, bâtiment…" autocomplete="off" />
+      <div id="suggest"></div>
+    </div>
+    <!-- Category quick-filter chips (populated from /categories) -->
+    <div id="catBar"></div>
+    <!-- 2D / 3D / satellite view controls -->
+    <div id="viewCtl">
+      <button id="btn2d" class="active" onclick="setView('2d')">2D</button>
+      <button id="btn3d" onclick="setView('3d')">3D</button>
+      <button id="btnSat" onclick="toggleSatellite()">🛰️</button>
+    </div>
+    <!-- Single unified info panel for click / selection -->
+    <div id="infoCard">
+      <button class="close" onclick="hideInfo()">×</button>
+      <div class="hd"><div class="title"></div><div class="cat"></div></div>
+      <div class="body"></div>
+      <div class="acts">
+        <button onclick="routeToInfoTarget()">🧭 Itinéraire</button>
+        <button onclick="hideInfo()" style="background:#64748b">Fermer</button>
+      </div>
+    </div>
+  </div>
   <div id="panel">
     <h1>MAPNET — Console carte</h1>
 
@@ -429,6 +493,276 @@ async function pollSync(){
 setInterval(pollSync, 3000);
 
 map.on('load', loadEdges);
+
+// ════════════════════════════════════════════════════════════════════════
+// PLACES: event-driven search, 3-level click, categories, open_now, 3D.
+// All API calls are same-origin (gateway reverse-proxies /api/v1/places/*).
+// The map is NEVER reloaded: we only flyTo() and setData()/addLayer().
+// ════════════════════════════════════════════════════════════════════════
+const places = () => '/api/v1/places';
+
+function _catIcon(cat){
+  const m = { restaurant:'🍽️', hotel:'🏨', school:'🏫', college_university:'🎓',
+    hospital:'🏥', pharmacy:'💊', bank:'🏦', shopping:'🛍️', beauty_salon:'💇',
+    spas:'🧖', religious_organization:'⛪', professional_services:'💼',
+    real_estate_service:'🏘️', gas_station:'⛽', neighborhood:'🏙️',
+    locality:'🏙️', county:'🗺️', region:'🗺️', country:'🇨🇲', building:'🏢' };
+  return m[(cat||'').toLowerCase()] || '📍';
+}
+function _kindLabel(k){
+  return ({districts:'Quartiers / subdivisions', neighborhoods:'Quartiers',
+    places:'Établissements', buildings:'Bâtiments', roads:'Voies'})[k] || k;
+}
+
+// ── 1. Debounced hierarchical search (no reload) ──────────────────────────
+let _searchTimer = null, _lastQuery = '', _suggestItems = [], _suggestIdx = -1;
+const searchBox = $('searchBox'), suggest = $('suggest');
+
+searchBox.addEventListener('keyup', (e) => {
+  if(e.key === 'ArrowDown'){ _moveSuggest(1); return; }
+  if(e.key === 'ArrowUp'){ _moveSuggest(-1); return; }
+  if(e.key === 'Enter'){ if(_suggestIdx >= 0 && _suggestItems[_suggestIdx]) _pickResult(_suggestItems[_suggestIdx]); return; }
+  if(e.key === 'Escape'){ suggest.style.display='none'; return; }
+  const q = searchBox.value.trim();
+  if(_searchTimer) clearTimeout(_searchTimer);
+  if(q.length < 2){ suggest.style.display='none'; return; }
+  _searchTimer = setTimeout(() => runSearch(q), 250);   // debounce 250 ms
+});
+document.addEventListener('click', (e) => { if(!$('searchWrap').contains(e.target)) suggest.style.display='none'; });
+
+async function runSearch(q){
+  if(q === _lastQuery) return; _lastQuery = q;
+  const c = map.getCenter();
+  const url = `${places()}/search?q=${encodeURIComponent(q)}&grouped=true&limit=20&lat=${c.lat}&lon=${c.lng}`;
+  try {
+    const r = await (await fetch(url)).json();
+    renderSuggest(r.groups || {}, r.results || []);
+  } catch(err){ log('search err: '+err, 'err'); }
+}
+
+function renderSuggest(groups, flat){
+  _suggestItems = []; _suggestIdx = -1;
+  let html = '';
+  const order = ['neighborhoods','districts','places','buildings','roads'];
+  for(const g of order){
+    const arr = groups[g] || [];
+    if(!arr.length) continue;
+    html += `<div class="grp">${_kindLabel(g)}</div>`;
+    for(const it of arr){
+      const idx = _suggestItems.length; _suggestItems.push(it);
+      const sub = [it.category, it.city].filter(Boolean).join(' · ');
+      html += `<div class="item" data-idx="${idx}">
+        <span class="ic">${_catIcon(it.category || it.kind)}</span>
+        <span class="tx"><div class="nm">${it.name}</div><div class="sub">${sub}</div></span></div>`;
+    }
+  }
+  if(!_suggestItems.length){ suggest.style.display='none'; return; }
+  suggest.innerHTML = html;
+  suggest.querySelectorAll('.item').forEach(el =>
+    el.onclick = () => _pickResult(_suggestItems[+el.dataset.idx]));
+  suggest.style.display = 'block';
+}
+
+function _moveSuggest(dir){
+  const items = suggest.querySelectorAll('.item');
+  if(!items.length) return;
+  _suggestIdx = (_suggestIdx + dir + items.length) % items.length;
+  items.forEach((el,i) => el.classList.toggle('active', i === _suggestIdx));
+  items[_suggestIdx].scrollIntoView({block:'nearest'});
+}
+
+function _pickResult(it){
+  suggest.style.display='none'; searchBox.value = it.name;
+  if(it.longitude != null && it.latitude != null){
+    map.flyTo({ center:[it.longitude, it.latitude], zoom: it.kind==='division'?14:16 });
+    showInfoForResult(it);
+  }
+}
+
+// ── 2. Three-level map click -> ONE unified info panel ────────────────────
+// building (most precise) -> POI -> district (fallback). Never three popups.
+let _infoTarget = null;
+map.on('click', async (e) => {
+  if(_armOrigin || _armDest) return;              // routing arm modes win
+  const { lat, lng } = e.lngLat;
+  showInfoLoading(lat, lng);
+  try {
+    const [b, poi, dist] = await Promise.all([
+      fetch(`${places()}/building-at?lat=${lat}&lon=${lng}&radius=45`).then(r=>r.json()).catch(()=>null),
+      fetch(`${places()}/by-category?lat=${lat}&lon=${lng}&radius=120&limit=1`).then(r=>r.json()).catch(()=>null),
+      fetch(`${places()}/nearest-district?lat=${lat}&lon=${lng}`).then(r=>r.json()).catch(()=>null),
+    ]);
+    const bld = b && b.buildings && b.buildings[0];
+    const p   = poi && poi.results && poi.results[0];
+    const d   = dist && dist.name ? dist : null;
+    if(bld){
+      renderInfo({ title: bld.label, cat: (bld.poi_category||bld.class||'Bâtiment'),
+        district: d && d.name, city: bld.city, lat: bld.latitude, lon: bld.longitude,
+        level:'Bâtiment' });
+    } else if(p){
+      renderInfo({ title: p.name, cat: p.category, district: d && d.name, city: d && d.city,
+        phone: p.phone, website: p.website, open_status: p.open_status, is_open: p.is_open,
+        opening_hours: p.opening_hours, lat: p.latitude, lon: p.longitude, level:'Établissement' });
+    } else if(d){
+      renderInfo({ title: d.name, cat: (d.subtype||'Quartier'), city: d.city,
+        lat, lon: lng, level:'Quartier' });
+    } else {
+      renderInfo({ title:'Position', cat:`${lat.toFixed(5)}, ${lng.toFixed(5)}`, lat, lon:lng, level:'Point' });
+    }
+  } catch(err){ log('click info err: '+err, 'err'); }
+});
+
+function showInfoLoading(lat, lon){
+  const card = $('infoCard');
+  card.querySelector('.title').textContent = 'Analyse du point…';
+  card.querySelector('.cat').textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  card.querySelector('.body').innerHTML = '';
+  card.style.display='block';
+}
+
+function renderInfo(o){
+  _infoTarget = { lat:o.lat, lon:o.lon, name:o.title };
+  const card = $('infoCard');
+  card.querySelector('.title').textContent = `${_catIcon(o.cat)} ${o.title}`;
+  card.querySelector('.cat').textContent = [o.level, o.cat].filter(Boolean).join(' · ');
+  let body = '';
+  if(o.district) body += `<div class="line">Quartier : <b>${o.district}</b></div>`;
+  if(o.city)     body += `<div class="line">Ville : <b>${o.city}</b></div>`;
+  // open_now — unknown stays truly unknown, never rendered as closed.
+  if(o.open_status){
+    const st = o.is_open === true ? 'open' : (o.is_open === false ? 'closed' : 'unknown');
+    const lbl = st==='open' ? '🟢 Ouvert' : (st==='closed' ? '🔴 Fermé' : '⚪ Horaires inconnus');
+    body += `<div><span class="status ${st}">${lbl}</span></div>`;
+    if(o.opening_hours) body += `<div class="line" style="color:#64748b">${o.opening_hours}</div>`;
+  }
+  if(o.phone)   body += `<div class="line">☎ <a href="tel:${o.phone}">${o.phone}</a></div>`;
+  if(o.website) body += `<div class="line">🌐 <a href="${o.website}" target="_blank" rel="noopener">Site web</a></div>`;
+  card.querySelector('.body').innerHTML = body || '<div class="line" style="color:#94a3b8">Aucune information détaillée.</div>';
+  card.style.display='block';
+}
+function showInfoForResult(it){
+  renderInfo({ title: it.name, cat: it.category || it.kind, city: it.city,
+    lat: it.latitude, lon: it.longitude, level: _kindLabel(it.kind) });
+}
+function hideInfo(){ $('infoCard').style.display='none'; _infoTarget=null; }
+function routeToInfoTarget(){
+  if(!_infoTarget) return;
+  _destination = { lat:_infoTarget.lat, lon:_infoTarget.lon };
+  if(_destMarker) _destMarker.remove();
+  _destMarker = new maplibregl.Marker({ color:'#ef4444' }).setLngLat([_destination.lon, _destination.lat]).addTo(map);
+  log(`destination = ${_infoTarget.name}`, 'ok');
+  if(_origin) computeRoute();
+  else { armOrigin(); log('cliquez pour poser votre position de départ', 'ok'); }
+}
+
+// ── 3. Category chips + by-category rendering (open_now aware) ─────────────
+let _activeCat = null, _catMarkers = [];
+async function loadCategories(){
+  try {
+    const r = await (await fetch(`${places()}/categories?min_count=10`)).json();
+    const top = (r.categories||[]).slice(0, 10);
+    $('catBar').innerHTML = top.map(c =>
+      `<div class="chip" data-cat="${c.category}">${c.icon} ${c.category} (${c.count})</div>`).join('');
+    $('catBar').querySelectorAll('.chip').forEach(el =>
+      el.onclick = () => toggleCategory(el.dataset.cat, el));
+  } catch(err){ log('categories err: '+err, 'err'); }
+}
+async function toggleCategory(cat, el){
+  $('catBar').querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  _catMarkers.forEach(m => m.remove()); _catMarkers = [];
+  if(_activeCat === cat){ _activeCat=null; return; }
+  _activeCat = cat; el.classList.add('active');
+  const c = map.getCenter();
+  const url = `${places()}/by-category?category=${encodeURIComponent(cat)}&lat=${c.lat}&lon=${c.lng}&radius=6000&limit=60`;
+  try {
+    const r = await (await fetch(url)).json();
+    (r.results||[]).forEach(p => {
+      if(p.longitude==null||p.latitude==null) return;
+      const dot = document.createElement('div');
+      const col = p.is_open===true ? '#16a34a' : (p.is_open===false ? '#ef4444' : '#64748b');
+      dot.style.cssText = `width:14px;height:14px;border-radius:50%;background:${col};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:pointer`;
+      const mk = new maplibregl.Marker(dot).setLngLat([p.longitude, p.latitude]).addTo(map);
+      dot.onclick = (ev) => { ev.stopPropagation(); renderInfo({ title:p.name, cat:p.category,
+        phone:p.phone, website:p.website, open_status:p.open_status, is_open:p.is_open,
+        opening_hours:p.opening_hours, lat:p.latitude, lon:p.longitude,
+        level:'Établissement', city:p.city }); };
+      _catMarkers.push(mk);
+    });
+    log(`${cat}: ${(r.results||[]).length} lieux affichés`, 'ok');
+  } catch(err){ log('by-category err: '+err, 'err'); }
+}
+
+// ── 4. 2D / 3D terrain + satellite (never destroys MAPNET layers) ─────────
+// We add DEM + hillshade + building extrusion as extra sources/layers on the
+// SAME style, so toggling never calls the destructive setStyle().
+let _view = '2d', _satOn = false, _terrainReady = false;
+const DEM_URL = 'https://demotiles.maplibre.org/terrain-tiles/tiles.json';
+const SAT_TILES = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+
+function _ensureTerrainSources(){
+  if(_terrainReady) return;
+  if(!map.getSource('dem')){
+    map.addSource('dem', { type:'raster-dem', url: DEM_URL });
+  }
+  if(!map.getLayer('hillshade')){
+    map.addLayer({ id:'hillshade', type:'hillshade', source:'dem',
+      paint:{ 'hillshade-exaggeration':0.4 } });
+  }
+  // 3D building extrusion driven by height/levels when available.
+  if(!map.getSource('mapnet-buildings')){
+    map.addSource('mapnet-buildings', { type:'geojson', data:{type:'FeatureCollection',features:[]} });
+    map.addLayer({ id:'buildings-3d', type:'fill-extrusion', source:'mapnet-buildings',
+      minzoom:15,
+      paint:{ 'fill-extrusion-color':'#94a3b8',
+        'fill-extrusion-height':['coalesce',['get','height'],12],
+        'fill-extrusion-opacity':0.75 } });
+  }
+  _terrainReady = true;
+}
+
+function setView(v){
+  setViewBtns(v);
+  _view = v;
+  _ensureTerrainSources();
+  if(v === '3d'){
+    map.setTerrain({ source:'dem', exaggeration:1.3 });
+    map.easeTo({ pitch:60, bearing:-20, duration:800 });
+    if(map.getLayer('buildings-3d')) map.setLayoutProperty('buildings-3d','visibility','visible');
+    log('vue 3D (terrain DEM + bâtiments extrudés)', 'ok');
+  } else {
+    map.setTerrain(null);
+    map.easeTo({ pitch:0, bearing:0, duration:600 });
+    if(map.getLayer('buildings-3d')) map.setLayoutProperty('buildings-3d','visibility','none');
+    log('vue 2D', 'ok');
+  }
+}
+function setViewBtns(v){
+  $('btn2d').classList.toggle('active', v==='2d');
+  $('btn3d').classList.toggle('active', v==='3d');
+}
+function toggleSatellite(){
+  _satOn = !_satOn;
+  $('btnSat').classList.toggle('active', _satOn);
+  // Add/remove a satellite raster layer BELOW everything — no setStyle().
+  if(_satOn){
+    if(!map.getSource('sat')){
+      map.addSource('sat', { type:'raster', tiles:[SAT_TILES], tileSize:256,
+        attribution:'© Esri World Imagery' });
+    }
+    if(!map.getLayer('sat')){
+      const firstId = map.getStyle().layers[0] && map.getStyle().layers[0].id;
+      map.addLayer({ id:'sat', type:'raster', source:'sat' }, firstId);
+    }
+    if(map.getLayer('osm')) map.setLayoutProperty('osm','visibility','none');
+    log('fond satellite activé', 'ok');
+  } else {
+    if(map.getLayer('sat')) map.setLayoutProperty('sat','visibility','none');
+    if(map.getLayer('osm')) map.setLayoutProperty('osm','visibility','visible');
+    log('fond satellite désactivé', 'ok');
+  }
+}
+
+map.on('load', () => { loadCategories(); });
 </script>
 </body>
 </html>
