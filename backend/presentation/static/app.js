@@ -319,14 +319,26 @@ function renderResults(data, q){
     el.addEventListener('click', ()=>pickResult(el.dataset));
   });
 }
+function fmtDistShort(m){
+  if (m==null || !Number.isFinite(m)) return '';
+  return m>=1000 ? (m/1000).toFixed(m<10000?1:0)+' km' : Math.round(m)+' m';
+}
+function confDot(c){
+  if (c==null) return '';
+  const cls = c>=0.85 ? 'conf-hi' : (c>=0.65 ? 'conf-mid' : 'conf-lo');
+  const title = 'Confiance ' + Math.round(c*100) + '%';
+  return `<span class="conf-dot ${cls}" title="${title}"></span>`;
+}
 function resItemHtml(it){
   const ic = iconFor(it.category, it.kind);
   const sub = [prettyCat(it.category), it.city ? cap(it.city) : ''].filter(Boolean).join(' · ');
+  const dist = fmtDistShort(it.distance_m);
   return `<div class="res-item" data-lat="${it.latitude}" data-lon="${it.longitude}"
       data-name="${esc(it.name)}" data-cat="${esc(it.category||'')}" data-kind="${esc(it.kind||'')}">
     <div class="res-ico"><i data-lucide="${ic}" class="lucide" width="17" height="17"></i></div>
-    <div class="res-txt"><div class="res-name">${esc(it.name)}</div>
+    <div class="res-txt"><div class="res-name">${confDot(it.confidence)}${esc(it.name)}</div>
       <div class="res-sub">${esc(sub)||'Cameroun'}</div></div>
+    ${dist ? `<div class="res-dist">${dist}</div>` : ''}
   </div>`;
 }
 

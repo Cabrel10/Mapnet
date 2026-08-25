@@ -313,6 +313,12 @@ def search_places(
         "GREATEST(0, 25 - (ST_Distance(geom::geography, "
         "ST_SetSRID(ST_MakePoint(:ulon, :ulat),4326)::geography) / 2000.0))"
     )
+    # raw distance in metres from the search anchor (user position or Yaoundé
+    # default). Exposed as `distance_m` so the frontend can show "à 1,2 km".
+    dist_m = (
+        "ST_Distance(geom::geography, "
+        "ST_SetSRID(ST_MakePoint(:ulon, :ulat),4326)::geography)"
+    )
 
     params = {
         "q_norm": q_norm, "like": like, "prefix": prefix,
@@ -323,28 +329,38 @@ def search_places(
 
     selects = []
     if "division" in want:
+        # Une division a une géométrie polygonale -> confiance élevée (0.9).
         selects.append(f"""
             SELECT division_id AS id, name, subtype AS category, 'division' AS kind,
                    COALESCE(city,'') AS city,
                    ST_Y(ST_Centroid(geom)) AS latitude, ST_X(ST_Centroid(geom)) AS longitude,
+                   {dist_m} AS distance_m, 'mapnet_divisions'::text AS source,
+                   0.90::float AS confidence,
                    ({_text_score('name')} + {prox} + 15) AS score
             FROM mapnet_divisions
             WHERE {_where_words('name')}
         """)
     if "place" in want:
+        # Confiance POI: base 0.6 (source unique Overture) + 0.2 si adresse connue.
         selects.append(f"""
             SELECT place_id AS id, name, category, 'place' AS kind,
                    COALESCE(city,'') AS city,
                    ST_Y(geom) AS latitude, ST_X(geom) AS longitude,
+                   {dist_m} AS distance_m, COALESCE(source,'overture')::text AS source,
+                   (0.60 + CASE WHEN address IS NOT NULL AND address <> '' THEN 0.20 ELSE 0 END
+                          + CASE WHEN validated THEN 0.20 ELSE 0 END)::float AS confidence,
                    ({_text_score('name')} + {prox} + 10) AS score
             FROM raw_places
             WHERE {_where_words('name')}
         """)
     if "building" in want:
+        # Bâtiment nommé -> confiance moyenne (0.7): empreinte réelle mais nom parfois générique.
         selects.append(f"""
             SELECT building_id AS id, name, class AS category, 'building' AS kind,
                    COALESCE(city,'') AS city,
                    ST_Y(ST_Centroid(geom)) AS latitude, ST_X(ST_Centroid(geom)) AS longitude,
+                   {dist_m} AS distance_m, 'mapnet_buildings'::text AS source,
+                   0.70::float AS confidence,
                    ({_text_score('name')} + {prox}) AS score
             FROM mapnet_buildings
             WHERE name IS NOT NULL AND name <> '' AND {_where_words('name')}
@@ -373,11 +389,21 @@ def search_places(
             detail=f"search error: {exc}",
         ) from exc
 
+    def _dist(v):
+        try:
+            return round(float(v), 1) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
     results = [
         {
             "id": r["id"], "name": r["name"], "category": r["category"],
             "kind": r["kind"], "city": r["city"],
             "latitude": r["latitude"], "longitude": r["longitude"],
+            "distance_m": _dist(r.get("distance_m")),
+            "source": r.get("source"),
+            "confidence": (round(float(r["confidence"]), 2)
+                           if r.get("confidence") is not None else None),
             "score": round(float(r["score"]), 2),
         }
         for r in rows
