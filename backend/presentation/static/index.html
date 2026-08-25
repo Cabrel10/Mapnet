@@ -187,6 +187,14 @@
       font-weight:700;padding:4px 0;line-height:1}
     .compass-cardinals button:hover{background:var(--brand);color:#fff}
     @media(max-width:480px){.search-wrap{max-width:none}.view-controls{top:120px}.compass-ctrl{top:240px}}
+    /* Marqueur "ICI" du résultat de recherche / destination */
+    .dest-marker{display:flex;flex-direction:column;align-items:center;cursor:pointer;filter:drop-shadow(0 3px 6px rgba(0,0,0,.35))}
+    .dest-pin{width:34px;height:34px;border-radius:50% 50% 50% 0;background:var(--accent,#e11d48);transform:rotate(-45deg);
+      display:flex;align-items:center;justify-content:center;border:2px solid #fff;animation:destDrop .45s ease-out}
+    .dest-pin .lucide{transform:rotate(45deg);color:#fff}
+    .dest-label{margin-top:6px;background:#111;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;
+      white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+    @keyframes destDrop{0%{transform:rotate(-45deg) translateY(-14px);opacity:0}100%{transform:rotate(-45deg) translateY(0);opacity:1}}
   </style>
 </head>
 <body>

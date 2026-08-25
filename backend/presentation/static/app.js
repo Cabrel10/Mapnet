@@ -83,6 +83,7 @@ window.resetNorth = resetNorth;
 let satelliteOn = false;
 let currentView = '2d';
 let userMarker = null, userPos = null;
+let destMarker = null;                  // marqueur "ICI" du résultat sélectionné / destination
 let selectedPlace = null;               // {title, lat, lon, ...}  = DESTINATION
 let routeOptions = [];                  // alternatives
 let chosenRoute = null;
@@ -329,16 +330,45 @@ function resItemHtml(it){
   </div>`;
 }
 
+// Marqueur "ICI" de destination / résultat de recherche.
+// Élément DOM custom (épingle animée) — distinct du marqueur d'origine (bleu) et du GPS.
+function setDestMarker(lat, lon, label){
+  if (!(Number.isFinite(lat) && Number.isFinite(lon))) return;
+  if (!destMarker){
+    const el = document.createElement('div');
+    el.className = 'dest-marker';
+    el.innerHTML =
+      '<div class="dest-pin"><i data-lucide="map-pin" class="lucide" width="18" height="18"></i></div>'
+      + '<div class="dest-label"></div>';
+    destMarker = new maplibregl.Marker({ element:el, anchor:'bottom' })
+      .setLngLat([lon, lat]).addTo(map);
+    renderIcons(el);
+  } else {
+    destMarker.setLngLat([lon, lat]);
+  }
+  const lbl = destMarker.getElement().querySelector('.dest-label');
+  if (lbl) lbl.textContent = label || 'ICI';
+}
+function clearDestMarker(){ if (destMarker){ destMarker.remove(); destMarker = null; } }
+window.setDestMarker = setDestMarker;
+window.clearDestMarker = clearDestMarker;
+
 function pickResult(d){
   const lat=parseFloat(d.lat), lon=parseFloat(d.lon);
   closeResults();
   $('q').value = d.name;
-  if (Number.isFinite(lat)&&Number.isFinite(lon)){
-    const z = d.kind==='division' ? 14 : 17;
-    map.flyTo({ center:[lon,lat], zoom:z, pitch:currentView==='3d'?55:0, duration:1100 });
-    showPlacePanel({ title:d.name, subtitle:prettyCat(d.cat)||'Lieu', lat, lon,
-      type:d.kind||'poi', category:d.cat });
+  // VALIDATION GÉOGRAPHIQUE : un résultat sans position exploitable ne doit
+  // jamais aboutir à un état "sélectionné" silencieux.
+  if (!(Number.isFinite(lat) && Number.isFinite(lon))){
+    toast('Ce résultat n’a pas de position géographique exploitable.');
+    return;
   }
+  const z = d.kind==='division' ? 14 : 17;
+  // 1) point réel -> 2) zoom automatique -> 3) marker "ICI" -> 4) panneau de confirmation
+  map.flyTo({ center:[lon,lat], zoom:z, pitch:currentView==='3d'?55:0, duration:1100 });
+  setDestMarker(lat, lon, d.name);
+  showPlacePanel({ title:d.name, subtitle:prettyCat(d.cat)||'Lieu', lat, lon,
+    type:d.kind||'poi', category:d.cat });
 }
 function closeResults(){ $('results').classList.remove('show'); }
 document.addEventListener('click', e=>{ if(!e.target.closest('.search-wrap')) closeResults(); });
