@@ -1,8 +1,10 @@
 # MapNet — Cartographie collaborative offline-first pour le terrain
 
-**Version :** 2.0 terrain  
-**Statut :** Opérationnel — backend, carte Leaflet et application Android  
-**Dernière validation :** 2 août 2026
+**Version :** 2.1 mobile
+
+**Statut :** Opérationnel — backend, carte Leaflet et deux applications Android
+
+**Dernière validation :** 31 août 2026
 
 ---
 
@@ -24,6 +26,8 @@
 
 | Capacité | État livré |
 |----------|------------|
+| MapNet Terrain Android | Capture GPS/capteurs, navigation, stockage local et synchronisation vers le backend DDD |
+| MapNet Data Mule Android | Dashboard hors-ligne et synchronisation différentielle manifest/delta via la Gateway Go |
 | Synchronisation offline-first | Retry exponentiel persistant, 5 essais, dead-letter, historique et idempotence `capture_id` |
 | Agents | `Device`/`DeviceSession`, heartbeat 30 s, online/offline et GeoJSON combiné |
 | Quartiers | Reverse-geocoding Nominatim, cache disque et filtre Leaflet dynamique |
@@ -123,7 +127,22 @@ flutter build apk --release
 - `serverUrl` : gateway déployée (défaut : `http://169.58.67.16:8088`)
 - `syncIntervalSeconds` : Cadence sync (défaut : 20s)
 
-#### 3. Backend (Python)
+#### 3. Data Mule (Flutter)
+
+```bash
+cd services/mobile-client
+flutter pub get
+flutter test
+flutter build apk --release \
+  --dart-define=MAPNET_GATEWAY=http://169.58.67.16:8080
+```
+
+Les deux APK universels installables sont publiés dans `apk_dist/` :
+
+- `mapnet-terrain-v1.1.0.apk` (`com.cabrel10.mapnet_mobile`) ;
+- `mapnet-data-mule-v1.1.0.apk` (`com.cabrel10.mapnet_mobile_client`).
+
+#### 4. Backend (Python)
 
 ```bash
 cd backend
@@ -140,7 +159,7 @@ python presentation/server.py
 
 Accès local : `http://localhost:8088` — aucune capture de démonstration n'est générée.
 
-#### 4. Docker (optionnel)
+#### 5. Docker (optionnel)
 
 ```bash
 docker-compose up -d

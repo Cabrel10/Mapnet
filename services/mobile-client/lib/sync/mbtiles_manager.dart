@@ -23,7 +23,8 @@ class MbTilesManager {
 
     // Vérification de la présence du fichier de base
     if (!await File(path).exists()) {
-      throw Exception("Fichier de tuiles yaounde.mbtiles introuvable. Veuillez exécuter une synchronisation Wi-Fi.");
+      throw Exception(
+          "Fichier de tuiles yaounde.mbtiles introuvable. Veuillez exécuter une synchronisation Wi-Fi.");
     }
 
     return await openDatabase(path, readOnly: true);

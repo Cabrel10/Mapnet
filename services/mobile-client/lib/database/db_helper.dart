@@ -9,8 +9,26 @@
 //   - local_road_attributes : arêtes de voirie synchronisées + collectées
 //   - local_telemetry       : traces GPS collectées passivement sur le terrain
 
-import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'package:sqflite/sqflite.dart';
+
+class LocalDataSummary {
+  const LocalDataSummary({
+    required this.localVersion,
+    required this.serverVersion,
+    required this.lastSyncAt,
+    required this.roadCount,
+    required this.pendingTelemetryCount,
+  });
+
+  final int localVersion;
+  final int serverVersion;
+  final DateTime? lastSyncAt;
+  final int roadCount;
+  final int pendingTelemetryCount;
+
+  bool get isCurrent => localVersion > 0 && localVersion >= serverVersion;
+}
 
 class DatabaseHelper {
   static const _dbName = 'mapnet_local.db';
@@ -80,7 +98,37 @@ class DatabaseHelper {
 
     await db.execute(
         'CREATE INDEX idx_road_sync ON local_road_attributes(sync_status)');
-    await db.execute(
-        'CREATE INDEX idx_tel_sync ON local_telemetry(sync_status)');
+    await db
+        .execute('CREATE INDEX idx_tel_sync ON local_telemetry(sync_status)');
+  }
+
+  Future<LocalDataSummary> getLocalSummary() async {
+    final db = await database;
+    final versions = await db.query(
+      'sync_dataset',
+      columns: ['local_version', 'server_version', 'last_sync_at'],
+      where: 'dataset_name = ?',
+      whereArgs: ['map'],
+      limit: 1,
+    );
+    final roadRows = await db.rawQuery(
+      'SELECT COUNT(*) AS total FROM local_road_attributes',
+    );
+    final telemetryRows = await db.rawQuery(
+      'SELECT COUNT(*) AS total FROM local_telemetry WHERE sync_status != ?',
+      [2],
+    );
+
+    final version = versions.isEmpty ? null : versions.first;
+    final lastSyncMillis = version?['last_sync_at'] as int?;
+    return LocalDataSummary(
+      localVersion: version?['local_version'] as int? ?? 0,
+      serverVersion: version?['server_version'] as int? ?? 0,
+      lastSyncAt: lastSyncMillis == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(lastSyncMillis),
+      roadCount: Sqflite.firstIntValue(roadRows) ?? 0,
+      pendingTelemetryCount: Sqflite.firstIntValue(telemetryRows) ?? 0,
+    );
   }
 }

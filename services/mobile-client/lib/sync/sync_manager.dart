@@ -1,120 +1,215 @@
 // MAPNET
 //
-// Repository: github.com/Cabrel10/Mapnet
-// Path: services/mobile-client/lib/sync/sync_manager.dart
+// Synchronisation différentielle du client Data Mule.
 
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
+
 import '../database/db_helper.dart';
 import 'polyline_decoder.dart';
 
+class SyncResult {
+  const SyncResult({
+    required this.success,
+    required this.localVersion,
+    required this.serverVersion,
+    required this.appliedChanges,
+    required this.completedAt,
+    this.error,
+  });
+
+  final bool success;
+  final int localVersion;
+  final int serverVersion;
+  final int appliedChanges;
+  final DateTime completedAt;
+  final String? error;
+
+  bool get isUpToDate => success && localVersion >= serverVersion;
+}
+
 class SyncManager {
-  final String gatewayUrl; // Adresse de la Go Gateway (ex: https://api.mapnet.local)
+  SyncManager({required String gatewayUrl, http.Client? client})
+      : gatewayUrl = gatewayUrl.replaceFirst(RegExp(r'/+$'), ''),
+        _client = client ?? http.Client();
+
+  final String gatewayUrl;
+  final http.Client _client;
   final DatabaseHelper dbHelper = DatabaseHelper.instance;
 
-  SyncManager({required this.gatewayUrl});
+  static const Duration _requestTimeout = Duration(seconds: 20);
 
-  /// Exécute la synchronisation différentielle incrémentale
-  Future<void> executeSync() async {
+  /// Exécute la synchronisation différentielle incrémentale.
+  ///
+  /// Une erreur réseau n'interrompt jamais l'application : elle est retournée
+  /// à l'interface afin que l'agent sache que le mode hors-ligne reste actif.
+  Future<SyncResult> executeSync() async {
     final db = await dbHelper.database;
+    var localVersion = 0;
+    var serverVersion = 0;
 
     try {
-      // 1. Interroger le manifest de la Gateway pour connaître la version serveur
-      final manifestResponse = await http.get(Uri.parse('$gatewayUrl/api/map/api/v1/sync/manifest'));
-      if (manifestResponse.statusCode != 200) throw Exception("Échec de récupération du manifest");
-
-      final Map<String, dynamic> manifest = json.decode(manifestResponse.body);
-      final int serverVersion = manifest['versions']['map'];
-
-      // 2. Récupérer la version locale stockée dans SQLite
-      final List<Map<String, dynamic>> versionResult = await db.query(
+      final versionRows = await db.query(
         'sync_dataset',
-        where: "dataset_name = 'map'"
+        columns: ['local_version'],
+        where: 'dataset_name = ?',
+        whereArgs: ['map'],
+        limit: 1,
       );
-
-      int localVersion = 0;
-      if (versionResult.isNotEmpty) {
-        localVersion = versionResult.first['local_version'] as int;
-      } else {
-        // Initialisation de la version de la carte en base locale
-        await db.insert('sync_dataset', {
-          'dataset_name': 'map',
-          'local_version': 0,
-          'server_version': serverVersion,
-          'last_sync_at': DateTime.now().millisecondsSinceEpoch
-        });
+      if (versionRows.isNotEmpty) {
+        localVersion = versionRows.first['local_version'] as int? ?? 0;
       }
 
-      // 3. Comparer les versions (Modèle Git-like)
+      final manifestResponse = await _client
+          .get(Uri.parse('$gatewayUrl/api/map/api/v1/sync/manifest'))
+          .timeout(_requestTimeout);
+      if (manifestResponse.statusCode != 200) {
+        throw Exception('manifest HTTP ${manifestResponse.statusCode}');
+      }
+
+      final manifest = jsonDecode(manifestResponse.body);
+      if (manifest is! Map<String, dynamic> ||
+          manifest['versions'] is! Map<String, dynamic> ||
+          (manifest['versions'] as Map<String, dynamic>)['map'] is! num) {
+        throw const FormatException('manifest MAPNET invalide');
+      }
+      serverVersion =
+          ((manifest['versions'] as Map<String, dynamic>)['map'] as num)
+              .toInt();
+
       if (localVersion >= serverVersion) {
-        // La carte locale est déjà à jour, arrêt du processus
-        return;
+        final completedAt = DateTime.now();
+        await _upsertVersion(
+          db,
+          localVersion: localVersion,
+          serverVersion: serverVersion,
+          completedAt: completedAt,
+        );
+        return SyncResult(
+          success: true,
+          localVersion: localVersion,
+          serverVersion: serverVersion,
+          appliedChanges: 0,
+          completedAt: completedAt,
+        );
       }
 
-      // 4. Télécharger uniquement le delta d'arêtes depuis la version locale
-      final deltaResponse = await http.get(
-        Uri.parse('$gatewayUrl/api/map/api/v1/sync/delta?since=$localVersion')
-      );
-      if (deltaResponse.statusCode != 200) throw Exception("Échec de téléchargement du delta");
+      final deltaResponse = await _client
+          .get(Uri.parse(
+            '$gatewayUrl/api/map/api/v1/sync/delta?since=$localVersion',
+          ))
+          .timeout(_requestTimeout);
+      if (deltaResponse.statusCode != 200) {
+        throw Exception('delta HTTP ${deltaResponse.statusCode}');
+      }
 
-      final Map<String, dynamic> deltaData = json.decode(deltaResponse.body);
-      final List<dynamic> changes = deltaData['changes'];
-      final int newHeadVersion = deltaData['head'];
+      final delta = jsonDecode(deltaResponse.body);
+      if (delta is! Map<String, dynamic> ||
+          delta['changes'] is! List<dynamic> ||
+          delta['head'] is! num) {
+        throw const FormatException('delta MAPNET invalide');
+      }
+      final changes = delta['changes'] as List<dynamic>;
+      final headVersion = (delta['head'] as num).toInt();
+      final completedAt = DateTime.now();
 
-      // 5. Appliquer les modifications en base locale SQLite (Transaction)
       await db.transaction((txn) async {
-        for (var change in changes) {
-          final String edgeId = change['edge_id'];
-          final String changeType = change['change_type']; // "A" (Ajout), "M" (Modification), "D" (Suppression)
+        for (final rawChange in changes) {
+          if (rawChange is! Map<String, dynamic>) {
+            throw const FormatException('entrée de delta invalide');
+          }
+          final edgeId = rawChange['edge_id']?.toString();
+          final changeType = rawChange['change_type']?.toString();
+          if (edgeId == null || edgeId.isEmpty) {
+            throw const FormatException('edge_id absent');
+          }
 
           if (changeType == 'D') {
-            // Suppression de l'arête locale
             await txn.delete(
               'local_road_attributes',
               where: 'attribute_id = ?',
-              whereArgs: [edgeId]
+              whereArgs: [edgeId],
             );
-          } else {
-            // Décodage de la géométrie compressée
-            final String encodedPolyline = change['geom_polyline'];
-            final points = PolylineDecoder.decode(encodedPolyline);
-
-            // Insertion ou mise à jour de l'arête avec sa géométrie décodée
-            await txn.insert(
-              'local_road_attributes',
-              {
-                'attribute_id': edgeId,
-                'trip_id': 'sync_import',
-                'latitude': points.first.latitude,
-                'longitude': points.first.longitude,
-                'road_type': change['highway_type'] ?? 'piste',
-                'is_oneway': change['is_oneway'] == true ? 1 : 0,
-                'pavement_condition': 'good',
-                'road_status': 'open',
-                'recorded_at': DateTime.now().millisecondsSinceEpoch,
-                'sync_status': 2 // Marqué comme synchronisé
-              },
-              conflictAlgorithm: ConflictAlgorithm.replace
-            );
+            continue;
           }
+          if (changeType != 'A' && changeType != 'M') {
+            throw FormatException('change_type inconnu: $changeType');
+          }
+
+          final encodedPolyline = rawChange['geom_polyline']?.toString() ?? '';
+          final points = PolylineDecoder.decode(encodedPolyline);
+          if (points.isEmpty) {
+            throw FormatException('géométrie vide pour $edgeId');
+          }
+
+          await txn.insert(
+            'local_road_attributes',
+            {
+              'attribute_id': edgeId,
+              'trip_id': 'sync_import',
+              'latitude': points.first.latitude,
+              'longitude': points.first.longitude,
+              'road_type': rawChange['highway_type'] ?? 'piste',
+              'is_oneway': rawChange['is_oneway'] == true ? 1 : 0,
+              'pavement_condition': 'good',
+              'road_status': 'open',
+              'recorded_at': completedAt.millisecondsSinceEpoch,
+              'sync_status': 2,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
         }
 
-        // 6. Mettre à jour le numéro de version local
-        await txn.update(
+        await txn.insert(
           'sync_dataset',
           {
-            'local_version': newHeadVersion,
+            'dataset_name': 'map',
+            'local_version': headVersion,
             'server_version': serverVersion,
-            'last_sync_at': DateTime.now().millisecondsSinceEpoch
+            'last_sync_at': completedAt.millisecondsSinceEpoch,
           },
-          where: "dataset_name = 'map'"
+          conflictAlgorithm: ConflictAlgorithm.replace,
         );
       });
 
-    } catch (e) {
-      // Gestion silencieuse des erreurs réseau (DTN - Résilience déconnectée)
-      print("Erreur de synchronisation MAPNET (mode dégradé actif) : $e");
+      return SyncResult(
+        success: true,
+        localVersion: headVersion,
+        serverVersion: serverVersion,
+        appliedChanges: changes.length,
+        completedAt: completedAt,
+      );
+    } catch (error) {
+      return SyncResult(
+        success: false,
+        localVersion: localVersion,
+        serverVersion: serverVersion,
+        appliedChanges: 0,
+        completedAt: DateTime.now(),
+        error: error.toString(),
+      );
     }
   }
+
+  Future<void> _upsertVersion(
+    Database db, {
+    required int localVersion,
+    required int serverVersion,
+    required DateTime completedAt,
+  }) {
+    return db.insert(
+      'sync_dataset',
+      {
+        'dataset_name': 'map',
+        'local_version': localVersion,
+        'server_version': serverVersion,
+        'last_sync_at': completedAt.millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  void close() => _client.close();
 }

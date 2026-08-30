@@ -5,7 +5,7 @@ description: >
   polylines PostGIS sur l'appareil, base SQLite locale et tuiles MBTiles
   hors-ligne (Data Mule).
 publish_to: "none"
-version: 0.1.0
+version: 1.1.0+2
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -15,6 +15,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.0
+  connectivity_plus: ^6.0.5
   sqflite: ^2.3.0
   path: ^1.9.0
   path_provider: ^2.1.0

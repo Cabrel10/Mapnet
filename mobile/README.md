@@ -33,12 +33,15 @@ flutter analyze
 flutter build apk --debug
 ```
 
-APK universel : `build/app/outputs/flutter-apk/app-debug.apk`.
+APK release universel : `build/app/outputs/flutter-apk/app-release.apk`.
 
-L'APK debug est signé avec la clé Android debug et peut être installé avec :
+L'APK de terrain `MapNet Terrain` est signé avec la clé Android debug pour une
+installation directe hors store :
 
 ```bash
-adb install -r build/app/outputs/flutter-apk/app-debug.apk
+adb install -r build/app/outputs/flutter-apk/app-release.apk
 ```
+
+Artefact distribué : `../apk_dist/mapnet-terrain-v1.1.0.apk`.
 
 Les permissions de localisation et de reconnaissance d'activité sont demandées à l'exécution. Les capteurs déclarés sont optionnels : l'application continue de fonctionner sur un appareil qui n'en possède pas et ne présente pas de valeur synthétique.

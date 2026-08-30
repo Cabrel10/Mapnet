@@ -16,8 +16,10 @@
 | 8096 | map-engine | Go | `/api/v1/map/edges.geojson`, `/api/v1/sync/manifest`, `/health` |
 | 9092 | Kafka | — | topic `quamtechs.mapnet.gps.raw` |
 | 5432 | Postgres/PostGIS | — | DB `quamtechs_db` (tables: mapnet_edges, gpx_traces, agent_positions) |
-| 8099 | distribution APK | http.server | `http://169.58.67.16:8099/mapnet-mobile-v1.0.0.apk` |
+| 8099 | distribution APK | http.server | `mapnet-terrain-v1.1.0.apk` et `mapnet-data-mule-v1.1.0.apk` |
 
 ## Notes
 - Données carto seedées depuis OSM (zone Yaoundé) : `scripts/seed_edges_osm.sh`
-- Géoloc navigateur : HTTPS requis — en HTTP utiliser "📌 Position par clic"
+- Géoloc navigateur : HTTPS requis — en HTTP utiliser « Position par clic ».
+- APK Terrain : `http://169.58.67.16:8099/mapnet-terrain-v1.1.0.apk`.
+- APK Data Mule : `http://169.58.67.16:8099/mapnet-data-mule-v1.1.0.apk`.
