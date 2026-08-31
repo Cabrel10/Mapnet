@@ -67,4 +67,18 @@ void main() {
 
     expect(find.text('Hors ligne — données locales actives'), findsOneWidget);
   });
+
+  testWidgets('le shell expose Navigation et Hors-ligne', (tester) async {
+    await tester.pumpWidget(const MapNetNavigationApp());
+    await tester.pump();
+
+    expect(find.text('Où allez-vous ?'), findsOneWidget);
+    expect(find.text('Navigation'), findsOneWidget);
+    expect(find.text('Hors-ligne'), findsOneWidget);
+
+    await tester.tap(find.text('Hors-ligne'));
+    await tester.pump();
+
+    expect(find.text('MapNet Data Mule'), findsOneWidget);
+  });
 }
