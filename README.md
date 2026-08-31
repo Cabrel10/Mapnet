@@ -27,7 +27,7 @@
 | Capacité | État livré |
 |----------|------------|
 | MapNet Terrain Android | Capture GPS/capteurs, navigation, stockage local et synchronisation vers le backend DDD |
-| MapNet Data Mule Android | Dashboard hors-ligne et synchronisation différentielle manifest/delta via la Gateway Go |
+| MapNet Navigation Android | Carte plein écran, recherche Cameroun, GPS, itinéraires guidés en français et onglet hors-ligne Data Mule |
 | Synchronisation offline-first | Retry exponentiel persistant, 5 essais, dead-letter, historique et idempotence `capture_id` |
 | Agents | `Device`/`DeviceSession`, heartbeat 30 s, online/offline et GeoJSON combiné |
 | Quartiers | Reverse-geocoding Nominatim, cache disque et filtre Leaflet dynamique |
@@ -127,7 +127,7 @@ flutter build apk --release
 - `serverUrl` : gateway déployée (défaut : `http://169.58.67.16:8088`)
 - `syncIntervalSeconds` : Cadence sync (défaut : 20s)
 
-#### 3. Data Mule (Flutter)
+#### 3. MapNet Navigation (Flutter)
 
 ```bash
 cd services/mobile-client
@@ -139,8 +139,10 @@ flutter build apk --release \
 
 Les deux APK universels installables sont publiés dans `apk_dist/` :
 
-- `mapnet-terrain-v1.1.0.apk` (`com.cabrel10.mapnet_mobile`) ;
-- `mapnet-data-mule-v1.1.0.apk` (`com.cabrel10.mapnet_mobile_client`).
+- `mapnet-terrain-v1.1.0.apk` (`com.cabrel10.mapnet_mobile`, versionCode 2) ;
+- `mapnet-navigation-v1.2.0.apk` (`com.cabrel10.mapnet_mobile_client`, versionCode 3).
+
+MapNet Navigation propose la recherche de quartiers, lieux, POI et bâtiments au Cameroun, la sélection sur carte, le calcul d’itinéraire, la distance, la durée et le guidage en français. Son onglet **Hors-ligne** conserve la synchronisation différentielle Data Mule.
 
 #### 4. Backend (Python)
 
