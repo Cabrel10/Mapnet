@@ -62,7 +62,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Future<void> _startLocation() async {
     try {
       if (!await Geolocator.isLocationServiceEnabled()) {
-        setState(() => _message = 'Activez le GPS pour démarrer un itinéraire.');
+        setState(
+            () => _message = 'Activez le GPS pour démarrer un itinéraire.');
         return;
       }
       var permission = await Geolocator.checkPermission();
@@ -71,14 +72,13 @@ class _NavigationScreenState extends State<NavigationScreen> {
       }
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
-        setState(() => _message = 'Autorisez la localisation pour vous guider.');
+        setState(
+            () => _message = 'Autorisez la localisation pour vous guider.');
         return;
       }
       final first = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 15),
-        ),
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 15),
       );
       _updatePosition(first, recenter: true);
       _positionSubscription = Geolocator.getPositionStream(
@@ -189,7 +189,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Future<void> _calculateRoute(LatLng destination) async {
     final origin = _position;
     if (origin == null) {
-      setState(() => _message = 'Position GPS requise pour calculer le trajet.');
+      setState(
+          () => _message = 'Position GPS requise pour calculer le trajet.');
       return;
     }
     setState(() {
@@ -364,7 +365,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
                                 padding: EdgeInsets.all(14),
                                 child: SizedBox.square(
                                   dimension: 18,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
                                 ),
                               )
                             : (_destination != null
@@ -478,9 +480,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
                               : (_destination?.name ?? 'Itinéraire'),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                         ),
                         const SizedBox(height: 6),
                         Text('${route.durationLabel} · ${route.distanceLabel}'),

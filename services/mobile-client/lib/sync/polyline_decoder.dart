@@ -3,7 +3,7 @@
 // Repository: github.com/Cabrel10/Mapnet
 // Path: services/mobile-client/lib/sync/polyline_decoder.dart
 
-import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:latlong2/latlong.dart';
 
 class PolylineDecoder {
   /// Décode une chaîne de caractères encodée (format Google Polyline de PostGIS)

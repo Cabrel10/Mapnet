@@ -2,6 +2,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 
 import 'database/db_helper.dart';
+import 'navigation/navigation_screen.dart';
 import 'sync/sync_manager.dart';
 
 const String mapNetGateway = String.fromEnvironment(
@@ -14,9 +15,70 @@ typedef SyncRunner = Future<SyncResult> Function();
 typedef ConnectionChecker = Future<bool> Function();
 
 void main() {
-  runApp(const MapNetDataMuleApp());
+  runApp(const MapNetNavigationApp());
 }
 
+class MapNetNavigationApp extends StatelessWidget {
+  const MapNetNavigationApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'MapNet Navigation',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF1677FF),
+          brightness: Brightness.light,
+        ),
+        useMaterial3: true,
+      ),
+      home: const MapNetHome(),
+    );
+  }
+}
+
+class MapNetHome extends StatefulWidget {
+  const MapNetHome({super.key});
+
+  @override
+  State<MapNetHome> createState() => _MapNetHomeState();
+}
+
+class _MapNetHomeState extends State<MapNetHome> {
+  int _index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(
+        index: _index,
+        children: const [
+          NavigationScreen(gatewayUrl: mapNetGateway),
+          DataMuleDashboard(),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (index) => setState(() => _index = index),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.navigation_outlined),
+            selectedIcon: Icon(Icons.navigation),
+            label: 'Navigation',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.offline_bolt_outlined),
+            selectedIcon: Icon(Icons.offline_bolt),
+            label: 'Hors-ligne',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Entrée dédiée au dashboard DTN, conservée pour les tests et l'exploitation.
 class MapNetDataMuleApp extends StatelessWidget {
   const MapNetDataMuleApp({
     super.key,
@@ -32,7 +94,7 @@ class MapNetDataMuleApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'MapNet Data Mule',
+      title: 'MapNet Navigation — données hors-ligne',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(

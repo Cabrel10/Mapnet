@@ -1,11 +1,9 @@
 name: mapnet_mobile_client
 description: >
-  MapNet — Client mobile Offline-First / DTN (Delay-Tolerant Networking).
-  Moteur de synchronisation différentielle avec la Gateway Go, décodage de
-  polylines PostGIS sur l'appareil, base SQLite locale et tuiles MBTiles
-  hors-ligne (Data Mule).
+  MapNet Navigation — carte, recherche Cameroun, itinéraires guidés et moteur
+  Offline-First / DTN avec synchronisation différentielle de la Gateway Go.
 publish_to: "none"
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -16,10 +14,12 @@ dependencies:
     sdk: flutter
   http: ^1.2.0
   connectivity_plus: ^6.0.5
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  geolocator: ^12.0.0
   sqflite: ^2.3.0
   path: ^1.9.0
   path_provider: ^2.1.0
-  maplibre_gl: ^0.20.0
 
 dev_dependencies:
   flutter_test:

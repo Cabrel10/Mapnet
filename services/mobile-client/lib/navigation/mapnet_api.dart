@@ -129,7 +129,8 @@ class MapNetApi {
         .replace(queryParameters: params);
     final response = await _client.get(uri).timeout(_timeout);
     if (response.statusCode != 200) {
-      throw NavigationException('Recherche indisponible (${response.statusCode})');
+      throw NavigationException(
+          'Recherche indisponible (${response.statusCode})');
     }
     final body = jsonDecode(response.body);
     if (body is! Map<String, dynamic> || body['results'] is! List<dynamic>) {
@@ -159,10 +160,12 @@ class MapNetApi {
         )
         .timeout(_timeout);
     if (response.statusCode != 200) {
-      throw NavigationException('Itinéraire indisponible (${response.statusCode})');
+      throw NavigationException(
+          'Itinéraire indisponible (${response.statusCode})');
     }
     final body = jsonDecode(response.body);
-    if (body is! Map<String, dynamic> || body['route'] is! Map<String, dynamic>) {
+    if (body is! Map<String, dynamic> ||
+        body['route'] is! Map<String, dynamic>) {
       throw const NavigationException('Réponse d’itinéraire invalide');
     }
     final route = body['route'] as Map<String, dynamic>;

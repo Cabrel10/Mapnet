@@ -1,16 +1,27 @@
-# MapNet Data Mule — Android offline-first
+# MapNet Navigation — Android client
 
-Application Android Flutter dédiée à la synchronisation différentielle de la
-carte MapNet dans les zones à connectivité intermittente.
+Application Android de navigation pour les clients MapNet, distincte de
+**MapNet Terrain**, l'application de collecte réservée aux agents.
 
-## Fonctions livrées
+## Navigation client
 
-- tableau de bord local : versions carte/serveur, routes, télémétries en attente ;
-- état de connectivité explicite, sans bloquer l'utilisation hors-ligne ;
-- synchronisation manuelle manifest → delta via la Gateway Go ;
-- application transactionnelle des changements A/M/D dans SQLite ;
-- affichage des erreurs réseau réelles et maintien automatique du mode dégradé ;
-- accès aux tuiles locales `yaounde.mbtiles` via `MbTilesManager`.
+- carte plein écran centrée sur la position GPS réelle ;
+- recherche Cameroun unifiée (quartiers, lieux et bâtiments) ;
+- résultats classés par pertinence et proximité ;
+- sélection d'une destination par recherche ou appui long sur la carte ;
+- calcul d'itinéraire via le moteur MapNet ;
+- tracé, distance, durée et instructions de guidage en français ;
+- suivi de position et progression dans les étapes ;
+- recentrage GPS et arrêt/reprise de la navigation.
+
+## Mode hors-ligne
+
+L'onglet **Hors-ligne** conserve le moteur Data Mule :
+
+- versions carte locale/serveur ;
+- routes SQLite et télémétries en attente ;
+- synchronisation différentielle manifest → delta ;
+- erreurs réseau visibles sans bloquer les données locales.
 
 ## Configuration Gateway
 
@@ -22,8 +33,10 @@ flutter build apk --release \
   --dart-define=MAPNET_GATEWAY=http://serveur:8080
 ```
 
-Contrat utilisé :
+Endpoints utilisés :
 
+- `GET /api/v1/places/search`
+- `POST /api/route/api/v1/routing/navigate`
 - `GET /api/map/api/v1/sync/manifest`
 - `GET /api/map/api/v1/sync/delta?since=<version>`
 
@@ -38,6 +51,6 @@ flutter build apk --release
 
 APK universel : `build/app/outputs/flutter-apk/app-release.apk`.
 
-L'APK de terrain est actuellement signé avec la clé Android debug afin d'être
-installable directement. Un keystore de publication dédié reste requis avant
-diffusion sur un store.
+L'APK est signé avec la clé Android debug afin d'être installable directement
+hors store. Un keystore de publication dédié reste requis avant publication sur
+Google Play.
