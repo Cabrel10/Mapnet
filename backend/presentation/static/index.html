@@ -178,6 +178,15 @@
 
     .fab-locate{position:absolute;right:14px;bottom:56px;z-index:15;width:44px;height:44px;border-radius:50%;
       background:var(--panel);box-shadow:var(--shadow);border:0;display:flex;align-items:center;justify-content:center;color:var(--brand)}
+    .fab-locate.tracking{background:var(--brand);color:#fff}
+    .sensor-panel{position:absolute;left:14px;top:112px;z-index:18;display:flex;flex-wrap:wrap;gap:6px;
+      max-width:min(620px,calc(100vw - 86px));pointer-events:none}
+    .sensor-chip{display:inline-flex;align-items:center;gap:5px;background:rgba(15,23,32,.9);color:#fff;
+      border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:5px 9px;font-size:11px;backdrop-filter:blur(6px)}
+    .sensor-chip b{font-variant-numeric:tabular-nums}.sensor-chip.warn{background:rgba(153,27,27,.94)}
+    .permission-banner{position:absolute;left:14px;right:14px;top:112px;z-index:55;max-width:620px;
+      background:#7f1d1d;color:#fff;border-radius:12px;box-shadow:var(--shadow);padding:11px 13px;font-size:12px;line-height:1.4}
+    .permission-banner[hidden]{display:none}.permission-banner a{color:#fff;font-weight:700}
     .maplibregl-ctrl-attrib{font-size:10px}
     /* Compas custom : sous les contrôles de vue, à droite */
     .compass-ctrl{position:absolute;right:14px;top:250px;z-index:15;display:flex;flex-direction:column;
@@ -190,7 +199,7 @@
     .compass-cardinals button{border:0;background:#f3f4f6;color:var(--ink);border-radius:6px;font-size:11px;
       font-weight:700;padding:4px 0;line-height:1}
     .compass-cardinals button:hover{background:var(--brand);color:#fff}
-    @media(max-width:480px){.search-wrap{max-width:none}.view-controls{top:120px}.compass-ctrl{top:240px}}
+    @media(max-width:480px){.search-wrap{max-width:none}.view-controls{top:120px}.compass-ctrl{top:240px}.sensor-panel,.permission-banner{top:112px}}
     /* Marqueur "ICI" du résultat de recherche / destination */
     .dest-marker{display:flex;flex-direction:column;align-items:center;cursor:pointer;filter:drop-shadow(0 3px 6px rgba(0,0,0,.35))}
     .dest-pin{width:34px;height:34px;border-radius:50% 50% 50% 0;background:var(--accent,#e11d48);transform:rotate(-45deg);
@@ -218,6 +227,15 @@
 
   <!-- Category chips -->
   <div id="chips" class="chips"></div>
+
+  <div id="permission-banner" class="permission-banner" hidden></div>
+  <div id="sensor-panel" class="sensor-panel" aria-live="polite">
+    <span id="gps-chip" class="sensor-chip"><i data-lucide="locate-fixed" class="lucide" width="13" height="13"></i> GPS <b id="gps-state">inactif</b></span>
+    <span class="sensor-chip"><i data-lucide="compass" class="lucide" width="13" height="13"></i> Cap <b id="heading-state">—</b></span>
+    <span class="sensor-chip"><i data-lucide="gauge" class="lucide" width="13" height="13"></i> Accel <b id="accel-state">—</b></span>
+    <span class="sensor-chip"><i data-lucide="rotate-3d" class="lucide" width="13" height="13"></i> Gyro <b id="gyro-state">—</b></span>
+    <span id="reroute-chip" class="sensor-chip"><i data-lucide="route" class="lucide" width="13" height="13"></i> Route <b id="reroute-state">prête</b></span>
+  </div>
 
   <!-- View controls -->
   <div class="view-controls">
@@ -250,7 +268,7 @@
     <button onclick="map.zoomIn()" aria-label="Zoom avant">+</button>
     <button onclick="map.zoomOut()" aria-label="Zoom arrière">−</button>
   </div>
-  <button class="fab-locate" title="Ma position" onclick="locateMe()"><i data-lucide="locate-fixed" class="lucide" width="20" height="20"></i></button>
+  <button id="btn-locate" class="fab-locate" title="Activer GPS et capteurs" onclick="activateTracking()"><i data-lucide="locate-fixed" class="lucide" width="20" height="20"></i></button>
 
   <!-- Place panel -->
   <div id="place-panel" class="place-panel">
@@ -335,6 +353,7 @@
 
   <div id="toast" class="toast"></div>
 
+  <script src="/navigation_math.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
