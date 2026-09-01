@@ -87,7 +87,15 @@ let destMarker = null;                  // marqueur "ICI" du résultat sélectio
 let selectedPlace = null;               // {title, lat, lon, ...}  = DESTINATION
 let routeOptions = [];                  // alternatives
 let chosenRoute = null;
-let nav = { active:false, watchId:null, steps:[], route:null, destName:'' };
+const NavMath = window.MapNetNavigationMath;
+let geoWatchId = null;
+let sensorsStarted = false;
+let sensorState = { heading:null, accel:null, gyro:null };
+let gpsAccuracy = null;
+let nav = {
+  active:false, steps:[], route:null, destName:'', currentStep:0,
+  rerouting:false, offRouteSince:null, lastRerouteAt:0
+};
 
 /* ---- Origine libre (GPS / clic carte / recherche) + profil transport ---- */
 let originMode = 'gps';                  // 'gps' | 'map' | 'search'
@@ -121,6 +129,18 @@ function haversine(a,b){ const R=6371000,dLat=(b.lat-a.lat)*Math.PI/180,dLon=(b.
   la1=a.lat*Math.PI/180,la2=b.lat*Math.PI/180;
   const h=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
   return 2*R*Math.asin(Math.sqrt(h)); }
+function setText(id, value){ const el=$(id); if(el) el.textContent=value; }
+function setRerouteState(text, warning=false){
+  setText('reroute-state', text);
+  const chip=$('reroute-chip'); if(chip) chip.classList.toggle('warn', warning);
+}
+function updateSensorHud(){
+  setText('gps-state', userPos ? `±${Math.round(gpsAccuracy||0)} m` : 'inactif');
+  setText('heading-state', sensorState.heading==null ? '—' : `${Math.round(sensorState.heading)}°`);
+  setText('accel-state', sensorState.accel==null ? '—' : `${sensorState.accel.toFixed(1)} m/s²`);
+  setText('gyro-state', sensorState.gyro==null ? '—' : `${sensorState.gyro.toFixed(2)} rad/s`);
+  const button=$('btn-locate'); if(button) button.classList.toggle('tracking', geoWatchId!=null);
+}
 
 /* ------------------------------------------------------------------ vector layers */
 function addVectorLayers(){
@@ -735,24 +755,31 @@ function clearRoute(){
 }
 
 /* ------------------------------------------------------------------ NAVIGATION */
-function startNavigation(){
+async function startNavigation(){
   if (!chosenRoute) return;
+  if (!userPos){
+    const enabled = await activateTracking();
+    if (!enabled && !userPos){ toast('Position GPS requise pour démarrer'); return; }
+  } else {
+    await enableMotionSensors();
+    startGpsWatch();
+  }
   nav.active = true; nav.route = chosenRoute;
-  nav.steps = (chosenRoute.steps||[]);
+  nav.steps = (chosenRoute.steps||[]); nav.currentStep=0;
+  nav.offRouteSince=null; nav.rerouting=false;
   $('route-choose').classList.remove('show');
   $('nav-top').classList.add('show');
   $('nav-bottom').classList.add('show');
   updateNavPanel(chosenRoute.distance, profDuration(chosenRoute.duration), firstInstruction());
-  map.easeTo({ pitch:60, zoom:17, duration:900 });
-  if ('geolocation' in navigator){
-    nav.watchId = navigator.geolocation.watchPosition(onNavPosition,
-      ()=>toast('Signal GPS faible'), { enableHighAccuracy:true, maximumAge:1000, timeout:8000 });
-  }
+  map.easeTo({ pitch:60, zoom:17, bearing:sensorState.heading||map.getBearing(), duration:900 });
 }
 window.startNavigation = startNavigation;
 
 function firstInstruction(){
-  if (nav.steps && nav.steps.length){ const s=nav.steps[0]; return s.instruction||s.text||'Continuez tout droit'; }
+  if (nav.steps && nav.steps.length){
+    const s=nav.steps[Math.min(nav.currentStep||0, nav.steps.length-1)];
+    return s.instruction||s.text||'Continuez tout droit';
+  }
   return 'Suivez l’itinéraire vers '+ (nav.destName||'la destination');
 }
 function updateNavPanel(distRemain, durRemain, instr){
@@ -762,65 +789,169 @@ function updateNavPanel(distRemain, durRemain, instr){
   $('nav-meta').textContent = fmtDist(distRemain)+' restants vers '+(nav.destName||'destination');
 }
 function onNavPosition(pos){
-  userPos = { lat:pos.coords.latitude, lng:pos.coords.longitude };
-  setUserMarker(userPos);
-  map.easeTo({ center:[userPos.lng,userPos.lat], duration:600 });
+  if (!nav.route || !nav.route.geometry) return;
   const coords = nav.route.geometry.coordinates;
-  let best=Infinity, idx=0;
-  for (let i=0;i<coords.length;i++){
-    const d=haversine(userPos,{lng:coords[i][0],lat:coords[i][1]});
-    if(d<best){best=d;idx=i;}
-  }
-  let rem=0; for(let i=idx;i<coords.length-1;i++){
+  const closest = NavMath.closestRouteSegment(userPos, coords);
+  let rem=0;
+  for(let i=closest.segmentIndex;i<coords.length-1;i++){
     rem+=haversine({lng:coords[i][0],lat:coords[i][1]},{lng:coords[i+1][0],lat:coords[i+1][1]});
+  }
+  while(nav.currentStep<nav.steps.length-1){
+    const step=nav.steps[nav.currentStep];
+    const loc=step.location||step.position;
+    if(!Array.isArray(loc) || loc.length<2 || haversine(userPos,{lng:loc[0],lat:loc[1]})>=40) break;
+    nav.currentStep++;
   }
   const durRem = profDuration(nav.route.duration * (rem/Math.max(nav.route.distance,1)));
   updateNavPanel(rem, durRem, firstInstruction());
-  if (best>80){ toast('Recalcul de l’itinéraire…'); recalcRoute(); }
+
+  const decision=NavMath.shouldReroute({
+    distance:closest.distance, accuracy:gpsAccuracy||0, now:Date.now(),
+    offRouteSince:nav.offRouteSince, lastRerouteAt:nav.lastRerouteAt,
+    rerouting:nav.rerouting, threshold:80, confirmationMs:4000, cooldownMs:20000
+  });
+  nav.offRouteSince=decision.offRouteSince;
+  if(closest.distance>decision.effectiveThreshold){
+    setRerouteState(`écart ${Math.round(closest.distance)} m`, true);
+  }else if(!nav.rerouting){
+    setRerouteState('sur itinéraire');
+  }
+  if(decision.trigger) recalcRoute();
   if (rem < 30){ toast('Vous êtes arrivé'); stopNavigation(); }
 }
 async function recalcRoute(){
-  if (!userPos || !selectedPlace) return;
+  if (!userPos || !selectedPlace || nav.rerouting) return false;
+  nav.rerouting=true; nav.lastRerouteAt=Date.now();
+  setRerouteState('recalcul…', true); toast('Recalcul de l’itinéraire…');
   try{
-    const r = await fetch('/api/routing/alternatives',{ method:'POST',
+    const response = await fetch('/api/routing/alternatives',{ method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ from_lat:userPos.lat, from_lon:userPos.lng,
         to_lat:selectedPlace.lat, to_lon:selectedPlace.lon, count:1,
-        costing: travelProfile }) }).then(r=>r.json());
-    if (r.routes && r.routes[0]){ nav.route=r.routes[0]; drawRoute(nav.route,false); }
-  }catch(e){}
+        costing: travelProfile }) });
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    const r=await response.json();
+    if (!(r.routes && r.routes[0])) throw new Error('aucun itinéraire');
+    nav.route=r.routes[0]; nav.steps=nav.route.steps||[]; nav.currentStep=0;
+    nav.offRouteSince=null; chosenRoute=nav.route;
+    drawRoute(nav.route,false); setRerouteState('recalculé');
+    toast('Nouvel itinéraire prêt'); return true;
+  }catch(e){
+    console.error('rerouting',e); setRerouteState('échec',true);
+    toast('Recalcul impossible — nouvel essai automatique'); return false;
+  }finally{ nav.rerouting=false; }
 }
 function stopNavigation(){
-  nav.active=false;
-  if (nav.watchId!=null){ navigator.geolocation.clearWatch(nav.watchId); nav.watchId=null; }
+  nav.active=false; nav.offRouteSince=null; nav.rerouting=false;
   $('nav-top').classList.remove('show');
   $('nav-bottom').classList.remove('show');
-  clearRoute();
-  map.easeTo({ pitch: currentView==='3d'?60:0, duration:700 });
+  setRerouteState('prête'); clearRoute();
+  map.easeTo({ pitch: currentView==='3d'?60:0, bearing:0, duration:700 });
 }
 window.stopNavigation = stopNavigation;
 
-/* ------------------------------------------------------------------ GEOLOCATION */
+/* ---------------------------------------------------- GEOLOCATION + SENSORS */
+function showSecurityDiagnostic(){
+  const banner=$('permission-banner'); if(!banner) return;
+  if(window.isSecureContext){ banner.hidden=true; return; }
+  banner.hidden=false;
+  banner.innerHTML='<b>GPS et capteurs bloqués :</b> ouvrez MapNet via HTTPS. Les navigateurs refusent ces permissions sur une adresse HTTP publique.';
+}
 function setUserMarker(pos){
   if (!userMarker){
     const el=document.createElement('div');
-    el.style.cssText='width:18px;height:18px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 0 4px rgba(37,99,235,.3)';
-    userMarker = new maplibregl.Marker({element:el}).setLngLat([pos.lng,pos.lat]).addTo(map);
+    el.style.cssText='width:32px;height:32px;display:flex;align-items:center;justify-content:center;filter:drop-shadow(0 2px 4px rgba(0,0,0,.35))';
+    el.innerHTML='<svg viewBox="0 0 32 32" width="32" height="32" aria-label="Position et orientation"><path d="M16 2 L27 28 L16 22 L5 28 Z" fill="#2563eb" stroke="#fff" stroke-width="2.5"/></svg>';
+    userMarker = new maplibregl.Marker({element:el,rotationAlignment:'map',pitchAlignment:'map'})
+      .setLngLat([pos.lng,pos.lat]).addTo(map);
   } else userMarker.setLngLat([pos.lng,pos.lat]);
+  if(sensorState.heading!=null) userMarker.setRotation(sensorState.heading);
+}
+function consumePosition(pos, recenter=false){
+  userPos={ lat:pos.coords.latitude, lng:pos.coords.longitude };
+  gpsAccuracy=Number.isFinite(pos.coords.accuracy)?pos.coords.accuracy:null;
+  if(sensorState.heading==null && Number.isFinite(pos.coords.heading)) sensorState.heading=NavMath.normalizeHeading(pos.coords.heading);
+  setUserMarker(userPos); setOriginLabel(); updateSensorHud();
+  if(nav.active){
+    map.easeTo({center:[userPos.lng,userPos.lat],bearing:sensorState.heading||map.getBearing(),duration:500});
+    onNavPosition(pos);
+  }else if(recenter){
+    map.flyTo({center:[userPos.lng,userPos.lat],zoom:16,duration:1000});
+  }
+}
+function geolocationError(error, silent=false){
+  setText('gps-state', error && error.code===1 ? 'permission refusée' : 'indisponible');
+  if(!silent) toast(error && error.code===1 ? 'Autorisez la localisation dans le navigateur' : 'Position GPS indisponible');
+}
+function startGpsWatch(){
+  if(geoWatchId!=null || !('geolocation' in navigator) || !window.isSecureContext) return false;
+  geoWatchId=navigator.geolocation.watchPosition(
+    pos=>consumePosition(pos,false), err=>geolocationError(err,true),
+    {enableHighAccuracy:true,maximumAge:1000,timeout:12000});
+  updateSensorHud(); return true;
 }
 function locateMe(silent){
   return new Promise(resolve=>{
-    if (!('geolocation' in navigator)){ if(!silent)toast('Géolocalisation non disponible'); return resolve(false); }
+    showSecurityDiagnostic();
+    if(!window.isSecureContext){ if(!silent)toast('HTTPS requis pour le GPS'); return resolve(false); }
+    if(!('geolocation' in navigator)){ if(!silent)toast('Géolocalisation non disponible'); return resolve(false); }
     navigator.geolocation.getCurrentPosition(pos=>{
-      userPos={ lat:pos.coords.latitude, lng:pos.coords.longitude };
-      setUserMarker(userPos);
-      if(!silent) map.flyTo({ center:[userPos.lng,userPos.lat], zoom:16, duration:1000 });
-      resolve(true);
-    }, ()=>{ if(!silent)toast('Position refusée ou indisponible'); resolve(false); },
-    { enableHighAccuracy:true, timeout:8000 });
+      consumePosition(pos,!silent); resolve(true);
+    }, err=>{ geolocationError(err,silent); resolve(false); },
+    {enableHighAccuracy:true,maximumAge:0,timeout:12000});
   });
 }
+async function requestSensorPermission(eventType){
+  if(!eventType || typeof eventType.requestPermission!=='function') return true;
+  try{ return (await eventType.requestPermission())==='granted'; }
+  catch(error){ console.warn('sensor permission',error); return false; }
+}
+function orientationHeading(event){
+  if(Number.isFinite(event.webkitCompassHeading)) return NavMath.normalizeHeading(event.webkitCompassHeading);
+  if(Number.isFinite(event.alpha)) return NavMath.normalizeHeading(360-event.alpha);
+  return null;
+}
+async function enableMotionSensors(){
+  if(sensorsStarted) return true;
+  if(!window.isSecureContext){ showSecurityDiagnostic(); return false; }
+  const orientationAllowed=await requestSensorPermission(window.DeviceOrientationEvent);
+  const motionAllowed=await requestSensorPermission(window.DeviceMotionEvent);
+  if(orientationAllowed && 'DeviceOrientationEvent' in window){
+    window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+    window.addEventListener('deviceorientation', handleOrientation, true);
+  }
+  if(motionAllowed && 'DeviceMotionEvent' in window) window.addEventListener('devicemotion', handleMotion, true);
+  sensorsStarted=orientationAllowed||motionAllowed;
+  if(!sensorsStarted) toast('Permission des capteurs refusée');
+  return sensorsStarted;
+}
+function handleOrientation(event){
+  const heading=orientationHeading(event); if(heading==null) return;
+  sensorState.heading=heading;
+  if(userMarker) userMarker.setRotation(heading);
+  if(nav.active) map.easeTo({bearing:heading,duration:250});
+  updateSensorHud();
+}
+function handleMotion(event){
+  const a=event.accelerationIncludingGravity||event.acceleration;
+  const r=event.rotationRate;
+  if(a && [a.x,a.y,a.z].some(Number.isFinite)){
+    sensorState.accel=Math.hypot(Number(a.x)||0,Number(a.y)||0,Number(a.z)||0);
+  }
+  if(r && [r.alpha,r.beta,r.gamma].some(Number.isFinite)){
+    sensorState.gyro=Math.hypot(Number(r.alpha)||0,Number(r.beta)||0,Number(r.gamma)||0)*Math.PI/180;
+  }
+  updateSensorHud();
+}
+async function activateTracking(){
+  showSecurityDiagnostic();
+  if(!window.isSecureContext){ toast('Ouvrez MapNet en HTTPS pour activer GPS et capteurs',4000); return false; }
+  await enableMotionSensors();
+  startGpsWatch();
+  return locateMe(false);
+}
 window.locateMe = locateMe;
+window.activateTracking = activateTracking;
 
 /* ------------------------------------------------------------------ STATS */
 const fmtCount = n => (n==null ? '—' : Number(n).toLocaleString('fr-FR'));
@@ -871,6 +1002,7 @@ map.on('load', ()=>{
 // createIcons() est idempotent : on l'appelle tout de suite, sur DOMContentLoaded,
 // et après un court délai, pour couvrir tout aléa de chargement du CDN lucide.
 function bootIcons(){
+  showSecurityDiagnostic(); updateSensorHud();
   renderIcons();
   const left = document.querySelectorAll('[data-lucide]').length;
   if(left>0){ /* le script CDN n'est peut-être pas encore prêt : on réessaie */
