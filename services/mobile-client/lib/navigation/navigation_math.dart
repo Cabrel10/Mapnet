@@ -63,10 +63,10 @@ class NavigationMath {
     LatLng start,
     LatLng end,
   ) {
-    final referenceLat =
-        (point.latitude + start.latitude + end.latitude) / 3;
-    final latitudeScale = math.pi * _earthRadiusM / 180;
-    final longitudeScale = latitudeScale * math.cos(referenceLat * math.pi / 180);
+    final referenceLat = (point.latitude + start.latitude + end.latitude) / 3;
+    const latitudeScale = math.pi * _earthRadiusM / 180;
+    final longitudeScale =
+        latitudeScale * math.cos(referenceLat * math.pi / 180);
 
     ({double x, double y}) project(LatLng value) => (
           x: value.longitude * longitudeScale,
@@ -79,7 +79,9 @@ class NavigationMath {
     final dx = b.x - a.x;
     final dy = b.y - a.y;
     final lengthSquared = dx * dx + dy * dy;
-    if (lengthSquared == 0) return math.sqrt(math.pow(p.x - a.x, 2) + math.pow(p.y - a.y, 2));
+    if (lengthSquared == 0) {
+      return math.sqrt(math.pow(p.x - a.x, 2) + math.pow(p.y - a.y, 2));
+    }
     final rawT = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared;
     final t = rawT.clamp(0.0, 1.0);
     final nearestX = a.x + t * dx;
@@ -100,7 +102,8 @@ class NavigationMath {
     Duration confirmation = const Duration(seconds: 4),
     Duration cooldown = const Duration(seconds: 20),
   }) {
-    final effectiveThreshold = math.max(thresholdM, math.max(0, accuracyM) * 2);
+    final effectiveThreshold =
+        math.max(thresholdM, math.max(0.0, accuracyM) * 2).toDouble();
     if (!distanceM.isFinite || distanceM <= effectiveThreshold) {
       return RerouteDecision(
         trigger: false,
@@ -110,7 +113,8 @@ class NavigationMath {
     }
     final startedAt = offRouteSince ?? now;
     final confirmed = now.difference(startedAt) >= confirmation;
-    final cooledDown = lastRerouteAt == null || now.difference(lastRerouteAt) >= cooldown;
+    final cooledDown =
+        lastRerouteAt == null || now.difference(lastRerouteAt) >= cooldown;
     return RerouteDecision(
       trigger: confirmed && cooledDown && !rerouting,
       offRouteSince: startedAt,
