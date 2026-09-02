@@ -86,12 +86,16 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
   StreamSubscription<SensorSnapshot>? _sensorSub;
 
   // --- Itinéraire guidé (position -> destination) ---
-  NavRoute? _route;            // itinéraire courant calculé par le serveur
-  LatLng? _navDestination;     // destination choisie (appui long sur la carte)
-  bool _navigating = false;    // navigation active (suivi + remontée position)
-  bool _routeLoading = false;  // calcul en cours
-  int _stepIndex = 0;          // étape courante pour le guidage
-  String get _agentId => 'agent_${DateTime.now().millisecondsSinceEpoch ~/ 100000}';
+  NavRoute? _route; // itinéraire courant calculé par le serveur
+  LatLng? _navDestination; // destination choisie (appui long sur la carte)
+  bool _navigating = false; // navigation active (suivi + remontée position)
+  bool _routeLoading = false; // calcul en cours
+  int _stepIndex = 0; // étape courante pour le guidage
+  DateTime? _offRouteSince;
+  DateTime? _lastRerouteAt;
+  double? _routeDistanceM;
+  String get _agentId =>
+      'agent_${DateTime.now().millisecondsSinceEpoch ~/ 100000}';
 
   @override
   void initState() {
@@ -182,8 +186,7 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
         _lastSync = outcome;
       });
       if (outcome.online && (outcome.pushed > 0 || outcome.pulled > 0)) {
-        _toast(
-            'Sync ↑${outcome.pushed} ↓${outcome.pulled} avec le serveur',
+        _toast('Sync ↑${outcome.pushed} ↓${outcome.pulled} avec le serveur',
             const Color(0xFF00E5A0));
       }
     });
@@ -230,8 +233,7 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
     );
     await _store.insertCapture(c);
     await _refresh();
-    _toast(
-        '${type.label} @ ±${acc.toStringAsFixed(1)} m — file de synchro',
+    _toast('${type.label} @ ±${acc.toStringAsFixed(1)} m — file de synchro',
         const Color(0xFF00E5A0));
     // Tente une synchro immédiate.
     SyncService.instance.syncOnce().then((o) {
@@ -259,7 +261,8 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
 
   Future<void> _setDestination(LatLng dest) async {
     if (_myPos == null) {
-      _toast('Position GPS requise pour un itinéraire', const Color(0xFFEF4444));
+      _toast(
+          'Position GPS requise pour un itinéraire', const Color(0xFFEF4444));
       return;
     }
     setState(() {
@@ -267,13 +270,18 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
       _routeLoading = true;
       _route = null;
       _stepIndex = 0;
+      _offRouteSince = null;
+      _routeDistanceM = null;
     });
     try {
-      final route = await RoutingService.instance.navigate(from: _myPos!, to: dest);
+      final route =
+          await RoutingService.instance.navigate(from: _myPos!, to: dest);
       if (!mounted) return;
       setState(() {
         _route = route;
         _routeLoading = false;
+        _offRouteSince = null;
+        _routeDistanceM = 0;
       });
       _toast('Itinéraire: ${route.distanceLabel} — ${route.durationLabel}',
           const Color(0xFF00E5A0));
@@ -297,6 +305,9 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
       _navDestination = null;
       _navigating = false;
       _stepIndex = 0;
+      _offRouteSince = null;
+      _lastRerouteAt = null;
+      _routeDistanceM = null;
     });
     _toast('Itinéraire effacé', const Color(0xFFF57C00));
   }
@@ -307,6 +318,8 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
       _navigating = !_navigating;
       _stepIndex = 0;
       _followMe = _navigating;
+      _offRouteSince = null;
+      _routeDistanceM = null;
     });
     if (_navigating) {
       _toast('Navigation démarrée', const Color(0xFF00E5A0));
@@ -331,7 +344,8 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
     // Avancement d'étape : proche (< 40 m) de la manoeuvre courante -> suivante.
     if (_stepIndex < route.steps.length - 1) {
       final stepLoc = route.steps[_stepIndex].location;
-      final d = const Distance().as(LengthUnit.Meter, stepLoc, LatLng(p.latitude, p.longitude));
+      final d = const Distance()
+          .as(LengthUnit.Meter, stepLoc, LatLng(p.latitude, p.longitude));
       if (d < 40) {
         setState(() => _stepIndex++);
         final next = route.steps[_stepIndex];
@@ -339,18 +353,31 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
       }
     }
 
-    // Déviation de trace : si > 60 m du point le plus proche, recalcul.
+    // Déviation mesurée à la trace (segments, pas seulement sommets), puis
+    // confirmée dans le temps avec seuil adapté à la précision GPS et cooldown.
     if (route.points.isNotEmpty) {
       final me = LatLng(p.latitude, p.longitude);
-      double minD = double.infinity;
-      const dist = Distance();
-      for (final pt in route.points) {
-        final d = dist.as(LengthUnit.Meter, pt, me);
-        if (d < minD) minD = d;
-        if (minD < 20) break; // assez proche, inutile de continuer
+      final proximity = GeoUtils.closestRouteSegment(me, route.points);
+      final now = DateTime.now();
+      final decision = GeoUtils.shouldReroute(
+        distanceM: proximity.distanceM,
+        accuracyM: p.accuracy,
+        now: now,
+        offRouteSince: _offRouteSince,
+        lastRerouteAt: _lastRerouteAt,
+        rerouting: _routeLoading,
+      );
+      if (mounted) {
+        setState(() {
+          _routeDistanceM = proximity.distanceM;
+          _offRouteSince = decision.offRouteSince;
+        });
       }
-      if (minD > 60 && _navDestination != null && !_routeLoading) {
-        _setDestination(_navDestination!); // recalcule depuis la position actuelle
+      if (decision.trigger && _navDestination != null) {
+        _lastRerouteAt = now;
+        _offRouteSince = null;
+        _toast('Déviation confirmée — recalcul', const Color(0xFFF57C00));
+        _setDestination(_navDestination!);
       }
     }
   }
@@ -439,7 +466,9 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                             color: _trustColor(c.trustScore),
                             size: c.owner == 1 ? 30 : 26,
                             shadows: c.owner == 0
-                                ? const [Shadow(color: Colors.black, blurRadius: 3)]
+                                ? const [
+                                    Shadow(color: Colors.black, blurRadius: 3)
+                                  ]
                                 : null,
                           ),
                         ))
@@ -465,13 +494,13 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                     width: 40,
                     height: 40,
                     child: const Icon(Icons.flag,
-                        color: Color(0xFFEF4444), size: 34,
+                        color: Color(0xFFEF4444),
+                        size: 34,
                         shadows: [Shadow(color: Colors.black, blurRadius: 4)]),
                   ),
                 ]),
             ],
           ),
-
           _buildHud(),
           _buildSyncBadge(),
           if (_route != null || _routeLoading) _buildNavPanel(),
@@ -499,43 +528,59 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
-            children: [
-              _hudTile(
-                  Icons.gps_fixed,
-                  'GPS',
-                  _myPos == null
-                      ? '—'
-                      : '±${_accuracyM.toStringAsFixed(1)} m',
-                  _myPos == null
-                      ? const Color(0xFFEF4444)
-                      : (_accuracyM <= 15
+              children: [
+                _hudTile(
+                    Icons.gps_fixed,
+                    'GPS',
+                    _myPos == null
+                        ? '—'
+                        : '±${_accuracyM.toStringAsFixed(1)} m',
+                    _myPos == null
+                        ? const Color(0xFFEF4444)
+                        : (_accuracyM <= 15
+                            ? const Color(0xFF00E5A0)
+                            : const Color(0xFFF57C00))),
+                _hudTile(
+                    Icons.satellite_alt,
+                    'HDOP',
+                    _myPos == null ? '—' : hdop.toStringAsFixed(1),
+                    Colors.white),
+                _hudTile(
+                    Icons.hub,
+                    'RÉSEAU',
+                    _netMode.startsWith('EN LIGNE') ? 'EN LIGNE' : 'HORS-LIGNE',
+                    _netMode.startsWith('EN LIGNE')
+                        ? const Color(0xFF00E5A0)
+                        : const Color(0xFFF57C00)),
+                _hudTile(
+                    Icons.storage, 'PTS', '${_captures.length}', Colors.white),
+                _hudTile(
+                    Icons.sync_problem,
+                    'ATTENTE',
+                    '$_pendingSync',
+                    _pendingSync == 0
+                        ? const Color(0xFF00E5A0)
+                        : const Color(0xFFEF4444)),
+                _hudTile(
+                    Icons.explore,
+                    'CAP',
+                    _sensors.headingDeg?.toStringAsFixed(0) ?? '—',
+                    Colors.white),
+                if (_navigating)
+                  _hudTile(
+                      Icons.route,
+                      'TRACE',
+                      _routeDistanceM == null
+                          ? '—'
+                          : '${_routeDistanceM!.round()} m',
+                      (_routeDistanceM ?? 0) <= 60
                           ? const Color(0xFF00E5A0)
-                          : const Color(0xFFF57C00))),
-              _hudTile(Icons.satellite_alt, 'HDOP',
-                  _myPos == null ? '—' : hdop.toStringAsFixed(1), Colors.white),
-              _hudTile(
-                  Icons.hub,
-                  'RÉSEAU',
-                  _netMode.startsWith('EN LIGNE') ? 'EN LIGNE' : 'HORS-LIGNE',
-                  _netMode.startsWith('EN LIGNE')
-                      ? const Color(0xFF00E5A0)
-                      : const Color(0xFFF57C00)),
-              _hudTile(
-                  Icons.storage, 'PTS', '${_captures.length}', Colors.white),
-              _hudTile(
-                  Icons.sync_problem,
-                  'ATTENTE',
-                  '$_pendingSync',
-                  _pendingSync == 0
-                      ? const Color(0xFF00E5A0)
-                      : const Color(0xFFEF4444)),
-              _hudTile(Icons.explore, 'CAP',
-                  _sensors.headingDeg?.toStringAsFixed(0) ?? '—', Colors.white),
-              _hudTile(Icons.speed, 'IMU', _sensors.hasImu ? 'RÉEL' : '—',
-                  _sensors.hasImu ? const Color(0xFF00E5A0) : Colors.grey),
-              _hudTile(Icons.directions_walk, 'PAS',
-                  _sensors.steps?.toString() ?? '—', Colors.white),
-            ],
+                          : const Color(0xFFF57C00)),
+                _hudTile(Icons.speed, 'IMU', _sensors.hasImu ? 'RÉEL' : '—',
+                    _sensors.hasImu ? const Color(0xFF00E5A0) : Colors.grey),
+                _hudTile(Icons.directions_walk, 'PAS',
+                    _sensors.steps?.toString() ?? '—', Colors.white),
+              ],
             ),
           ),
         ),
@@ -592,12 +637,8 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Row(children: [
-                          Icon(
-                              _navigating
-                                  ? Icons.navigation
-                                  : Icons.route,
-                              color: const Color(0xFF2196F3),
-                              size: 20),
+                          Icon(_navigating ? Icons.navigation : Icons.route,
+                              color: const Color(0xFF2196F3), size: 20),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -646,9 +687,8 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
         children: [
           FloatingActionButton.small(
             heroTag: 'navtoggle',
-            backgroundColor: _navigating
-                ? const Color(0xFFEF4444)
-                : const Color(0xFF00E5A0),
+            backgroundColor:
+                _navigating ? const Color(0xFFEF4444) : const Color(0xFF00E5A0),
             onPressed: _toggleNavigation,
             child: Icon(
               _navigating ? Icons.stop : Icons.navigation,
@@ -772,35 +812,35 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
       child: GestureDetector(
         onTap: _showSyncDetails,
         child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF121821).withOpacity(0.92),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-              color: syncing
-                  ? const Color(0xFFF57C00)
-                  : const Color(0xFF00E5A0)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(syncing ? Icons.cloud_upload : Icons.cloud_done,
-                size: 16,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF121821).withOpacity(0.92),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
                 color: syncing
                     ? const Color(0xFFF57C00)
                     : const Color(0xFF00E5A0)),
-            const SizedBox(width: 6),
-            Text(
-              syncing ? '$_pendingSync EN TRANSIT' : 'SYNCHRONISÉ',
-              style: TextStyle(
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(syncing ? Icons.cloud_upload : Icons.cloud_done,
+                  size: 16,
                   color: syncing
                       ? const Color(0xFFF57C00)
-                      : const Color(0xFF00E5A0),
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
+                      : const Color(0xFF00E5A0)),
+              const SizedBox(width: 6),
+              Text(
+                syncing ? '$_pendingSync EN TRANSIT' : 'SYNCHRONISÉ',
+                style: TextStyle(
+                    color: syncing
+                        ? const Color(0xFFF57C00)
+                        : const Color(0xFF00E5A0),
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -818,7 +858,8 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
           child: Column(
             children: [
               const Text('HISTORIQUE DE SYNCHRONISATION',
-                  style: TextStyle(color: Color(0xFF00E5A0), fontWeight: FontWeight.bold)),
+                  style: TextStyle(
+                      color: Color(0xFF00E5A0), fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               Text(
                 'Tentées ${_lastSync?.attempted ?? 0} · envoyées ${_lastSync?.pushed ?? 0} · '
@@ -827,7 +868,8 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                 style: const TextStyle(color: Color(0xFF9FB0C3), fontSize: 12),
               ),
               if (_lastSync?.error != null)
-                Text(_lastSync!.error!, style: const TextStyle(color: Color(0xFFEF4444))),
+                Text(_lastSync!.error!,
+                    style: const TextStyle(color: Color(0xFFEF4444))),
               const Divider(),
               Expanded(
                 child: ListView(
@@ -835,9 +877,11 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                       .map((row) => ListTile(
                             dense: true,
                             title: Text(row['message'] as String,
-                                style: const TextStyle(color: Colors.white, fontSize: 12)),
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 12)),
                             subtitle: Text(row['ts'] as String,
-                                style: const TextStyle(color: Color(0xFF6B7A8D), fontSize: 10)),
+                                style: const TextStyle(
+                                    color: Color(0xFF6B7A8D), fontSize: 10)),
                           ))
                       .toList(),
                 ),
@@ -942,9 +986,9 @@ class _MeDot extends StatefulWidget {
 }
 
 class _MeDotState extends State<_MeDot> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-      vsync: this, duration: const Duration(seconds: 2))
-    ..repeat();
+  late final AnimationController _c =
+      AnimationController(vsync: this, duration: const Duration(seconds: 2))
+        ..repeat();
 
   @override
   void dispose() {
