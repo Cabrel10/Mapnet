@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -6,16 +7,20 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'mapnet_api.dart';
+import 'navigation_math.dart';
+import 'navigation_sensors.dart';
 
 class NavigationScreen extends StatefulWidget {
   const NavigationScreen({
     super.key,
     required this.gatewayUrl,
     this.api,
+    this.sensorController,
   });
 
   final String gatewayUrl;
   final MapNetApi? api;
+  final NavigationSensorController? sensorController;
 
   @override
   State<NavigationScreen> createState() => _NavigationScreenState();
@@ -29,10 +34,17 @@ class _NavigationScreenState extends State<NavigationScreen> {
   final FocusNode _searchFocus = FocusNode();
 
   late final MapNetApi _api;
+  late final NavigationSensorController _sensorController;
+  late final bool _ownsSensorController;
   StreamSubscription<Position>? _positionSubscription;
+  StreamSubscription<NavigationSensorState>? _sensorSubscription;
   Timer? _searchDebounce;
   LatLng? _position;
   double _accuracyM = 0;
+  NavigationSensorState _sensorState = const NavigationSensorState();
+  DateTime? _offRouteSince;
+  DateTime? _lastRerouteAt;
+  double? _routeDistanceM;
   PlaceResult? _destination;
   NavigationRoute? _route;
   List<PlaceResult> _results = const [];
@@ -46,6 +58,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
   void initState() {
     super.initState();
     _api = widget.api ?? MapNetApi(gatewayUrl: widget.gatewayUrl);
+    _ownsSensorController = widget.sensorController == null;
+    _sensorController = widget.sensorController ?? NavigationSensorController();
+    _sensorSubscription = _sensorController.stream.listen((state) {
+      if (mounted) setState(() => _sensorState = state);
+    });
+    _sensorController.start();
     _startLocation();
   }
 
@@ -53,6 +71,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
   void dispose() {
     _searchDebounce?.cancel();
     _positionSubscription?.cancel();
+    _sensorSubscription?.cancel();
+    if (_ownsSensorController) _sensorController.dispose();
     _searchController.dispose();
     _searchFocus.dispose();
     if (widget.api == null) _api.close();
@@ -100,8 +120,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
     setState(() {
       _position = point;
       _accuracyM = position.accuracy;
-      if (_navigating) _advanceStep(point);
     });
+    if (_navigating) {
+      _advanceStep(point);
+      _evaluateReroute(point);
+    }
     if (recenter || _navigating) {
       _mapController.move(point, _navigating ? 17 : 15.5);
     }
@@ -111,14 +134,71 @@ class _NavigationScreenState extends State<NavigationScreen> {
     final route = _route;
     if (route == null || route.steps.isEmpty) return;
     const distance = Distance();
-    while (_stepIndex < route.steps.length - 1 &&
+    var nextIndex = _stepIndex;
+    while (nextIndex < route.steps.length - 1 &&
         distance.as(
               LengthUnit.Meter,
               point,
-              route.steps[_stepIndex].position,
+              route.steps[nextIndex].position,
             ) <
             40) {
-      _stepIndex++;
+      nextIndex++;
+    }
+    if (nextIndex != _stepIndex && mounted) {
+      setState(() => _stepIndex = nextIndex);
+    }
+  }
+
+  void _evaluateReroute(LatLng point) {
+    final route = _route;
+    final destination = _destination;
+    if (route == null || destination == null || route.points.isEmpty) return;
+
+    final proximity = NavigationMath.closestRouteSegment(point, route.points);
+    final decision = NavigationMath.shouldReroute(
+      distanceM: proximity.distanceM,
+      accuracyM: _accuracyM,
+      now: DateTime.now(),
+      offRouteSince: _offRouteSince,
+      lastRerouteAt: _lastRerouteAt,
+      rerouting: _routing,
+    );
+    if (mounted) {
+      setState(() {
+        _routeDistanceM = proximity.distanceM;
+        _offRouteSince = decision.offRouteSince;
+      });
+    }
+    if (decision.trigger) {
+      _rerouteFrom(point, destination.position);
+    }
+  }
+
+  Future<void> _rerouteFrom(LatLng origin, LatLng destination) async {
+    if (_routing) return;
+    final startedAt = DateTime.now();
+    setState(() {
+      _routing = true;
+      _lastRerouteAt = startedAt;
+      _offRouteSince = null;
+      _message = 'Déviation confirmée, recalcul de l’itinéraire…';
+    });
+    try {
+      final route = await _api.navigate(from: origin, to: destination);
+      if (!mounted || _destination?.position != destination) return;
+      setState(() {
+        _route = route;
+        _routing = false;
+        _stepIndex = 0;
+        _routeDistanceM = 0;
+        _message = 'Nouvel itinéraire prêt.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _routing = false;
+        _message = 'Recalcul impossible : $error';
+      });
     }
   }
 
@@ -198,6 +278,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
       _navigating = false;
       _route = null;
       _stepIndex = 0;
+      _offRouteSince = null;
+      _routeDistanceM = null;
       _message = null;
     });
     try {
@@ -206,6 +288,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
       setState(() {
         _route = route;
         _routing = false;
+        _offRouteSince = null;
+        _routeDistanceM = 0;
       });
       _mapController.fitCamera(
         CameraFit.bounds(
@@ -228,6 +312,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
       _route = null;
       _navigating = false;
       _stepIndex = 0;
+      _offRouteSince = null;
+      _lastRerouteAt = null;
+      _routeDistanceM = null;
       _searchController.clear();
       _message = null;
     });
@@ -238,6 +325,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
     setState(() {
       _navigating = !_navigating;
       _stepIndex = 0;
+      _offRouteSince = null;
+      _routeDistanceM = null;
     });
     if (_navigating && _position != null) {
       _mapController.move(_position!, 17);
@@ -316,14 +405,26 @@ class _NavigationScreenState extends State<NavigationScreen> {
                       point: _position!,
                       width: 28,
                       height: 28,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1677FF),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 4),
-                          boxShadow: const [
-                            BoxShadow(color: Colors.black26, blurRadius: 5),
-                          ],
+                      child: Transform.rotate(
+                        angle: NavigationMath.normalizeHeading(
+                              _sensorState.headingDeg ?? 0,
+                            ) *
+                            math.pi /
+                            180,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1677FF),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 3),
+                            boxShadow: const [
+                              BoxShadow(color: Colors.black26, blurRadius: 5),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.navigation,
+                            color: Colors.white,
+                            size: 17,
+                          ),
                         ),
                       ),
                     ),
@@ -416,9 +517,45 @@ class _NavigationScreenState extends State<NavigationScreen> {
               ),
             ),
           ),
+          Positioned(
+            top: 88,
+            left: 16,
+            right: 16,
+            child: SafeArea(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Material(
+                  elevation: 3,
+                  borderRadius: BorderRadius.circular(12),
+                  color:
+                      Theme.of(context).colorScheme.surface.withOpacity(0.94),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    child: Wrap(
+                      spacing: 12,
+                      runSpacing: 4,
+                      children: [
+                        Text('GPS ±${_accuracyM.toStringAsFixed(0)} m'),
+                        Text(_sensorState.headingDeg == null
+                            ? 'CAP —'
+                            : 'CAP ${_sensorState.headingDeg!.round()}°'),
+                        Text(_sensorState.hasAccelerometer &&
+                                _sensorState.hasGyroscope
+                            ? 'IMU actif'
+                            : 'IMU —'),
+                        if (_navigating && _routeDistanceM != null)
+                          Text('Trace ${_routeDistanceM!.round()} m'),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
           if (_message != null)
             Positioned(
-              top: 94,
+              top: 138,
               left: 16,
               right: 16,
               child: SafeArea(
