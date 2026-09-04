@@ -42,6 +42,11 @@ class GpsService {
   /// Ouvre les réglages de l'app (cas refus définitif).
   Future<void> openSettings() => openAppSettings();
 
+  /// Ouvre les réglages de localisation de l'appareil (cas service GPS désactivé).
+  /// C'est l'issue correcte pour [GpsPermissionResult.serviceDisabled] : relancer
+  /// la demande de permission ne sert à rien tant que le GPS système est coupé.
+  Future<bool> openLocationSettings() => Geolocator.openLocationSettings();
+
   /// Position ponctuelle haute précision (déclenchée par le bouton capture).
   Future<Position> current() {
     return Geolocator.getCurrentPosition(

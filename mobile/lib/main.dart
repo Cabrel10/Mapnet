@@ -985,6 +985,18 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                   Navigator.pop(ctx);
                   if (res == GpsPermissionResult.deniedForever) {
                     await GpsService.instance.openSettings();
+                  } else if (res == GpsPermissionResult.serviceDisabled) {
+                    // FIX boucle d'autorisation : quand le GPS système est
+                    // désactivé, relancer _bootstrap() retourne immédiatement
+                    // serviceDisabled et réaffiche cette modale à l'infini.
+                    // L'issue correcte est les réglages de localisation.
+                    await GpsService.instance.openLocationSettings();
+                    // Re-vérification unique au retour des réglages : si le
+                    // service est maintenant actif, on démarre ; sinon on
+                    // laisse l'utilisateur décider (plus de boucle modale).
+                    if (await Geolocator.isLocationServiceEnabled()) {
+                      await _bootstrap();
+                    }
                   } else {
                     await _bootstrap();
                   }
@@ -992,9 +1004,23 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
                 child: Text(
                     res == GpsPermissionResult.deniedForever
                         ? 'OUVRIR LES RÉGLAGES'
-                        : 'AUTORISER',
+                        : res == GpsPermissionResult.serviceDisabled
+                            ? 'ACTIVER LE GPS'
+                            : 'AUTORISER',
                     style: const TextStyle(
                         color: Colors.black, fontWeight: FontWeight.bold)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Issue de secours : la modale était piégée (isDismissible:false,
+            // aucun bouton d'annulation) — l'utilisateur devait pouvoir
+            // continuer en mode dégradé sans position.
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('PLUS TARD',
+                    style: TextStyle(color: Color(0xFF9FB0C3))),
               ),
             ),
           ],
