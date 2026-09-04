@@ -141,9 +141,20 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
     }
   }
 
+  // Seuil de rejet GPS (terrain) : au-delà de 30 m d'incertitude, une
+  // collecte terrain n'a pas de valeur cartographique — on conserve la
+  // dernière position fiable et on attend un meilleur fix.
+  static const double _maxAccuracyM = 30.0;
+
   void _startGps() {
     _posSub?.cancel();
     _posSub = GpsService.instance.stream().listen((p) {
+      if (p.accuracy > _maxAccuracyM) {
+        // Position trop approximative : met à jour l'indicateur de précision
+        // sans déplacer la carte ni polluer la présence/guidage.
+        setState(() => _accuracyM = p.accuracy);
+        return;
+      }
       final ll = LatLng(p.latitude, p.longitude);
       setState(() {
         _myPos = ll;
@@ -162,6 +173,10 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
     });
     // Fix initial rapide.
     GpsService.instance.current().then((p) {
+      if (p.accuracy > _maxAccuracyM) {
+        setState(() => _accuracyM = p.accuracy);
+        return;
+      }
       final ll = LatLng(p.latitude, p.longitude);
       setState(() {
         _myPos = ll;
@@ -215,6 +230,16 @@ class _FieldMapScreenState extends State<FieldMapScreen> {
       return;
     }
     final acc = pos.accuracy;
+    // Garde-fou : une capture au-delà de 30 m d'incertitude n'a pas de valeur
+    // cartographique terrain — on la refuse plutôt que de polluer la base.
+    if (acc > _maxAccuracyM) {
+      _toast(
+        'Précision insuffisante (±${acc.toStringAsFixed(0)} m > 30 m) — '
+        'attendez un meilleur fix GPS',
+        const Color(0xFFEF4444),
+      );
+      return;
+    }
     // Trust score dérivé de la précision réelle : plus précis => plus fiable.
     final trust = (1.0 - (acc / 50.0)).clamp(0.2, 0.98);
     final c = Capture(

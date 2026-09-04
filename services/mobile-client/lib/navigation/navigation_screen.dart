@@ -114,8 +114,18 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
   }
 
+  // Seuil de rejet GPS : une position dont l'incertitude dépasse 30 m est
+  // trop approximative pour la navigation piétonne/terrain (Cameroun).
+  static const double _maxAccuracyM = 30.0;
+
   void _updatePosition(Position position, {bool recenter = false}) {
     if (!mounted) return;
+    // Rejet des positions trop imprécises : on conserve la dernière
+    // position fiable plutôt que de dériver sur une mesure bruitée.
+    if (position.accuracy > _maxAccuracyM) {
+      setState(() => _accuracyM = position.accuracy);
+      return;
+    }
     final point = LatLng(position.latitude, position.longitude);
     setState(() {
       _position = point;

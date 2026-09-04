@@ -33,11 +33,29 @@ class NavigationSensorState {
 }
 
 class NavigationSensorController {
+  // Filtre passe-bas exponentiel (EMA). alpha petit = lissage fort.
+  // Les gyro/accéléromètre bruts vibrent fortement en déplacement terrain ;
+  // sans lissage le heading visuel et les magnitudes sont inexploitables.
+  static const double _alpha = 0.15;
+  // Correction d'offset gyroscope : biais moyen appris au repos pendant les
+  // [_calibrationSamples] premières mesures (capteur immobile au démarrage).
+  static const int _calibrationSamples = 40;
+  // Seuil de repos gyro (rad/s) : au-dessus, on suspend la calibration.
+  static const double _restThresholdRadS = 0.05;
+
   final _controller = StreamController<NavigationSensorState>.broadcast();
   StreamSubscription<CompassEvent>? _compassSubscription;
   StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
   NavigationSensorState _state = const NavigationSensorState();
+
+  double? _smoothAccel;
+  double? _smoothGyro;
+  double _gyroBias = 0;
+  int _gyroCalibCount = 0;
+
+  double _lowPass(double? previous, double next) =>
+      previous == null ? next : previous + _alpha * (next - previous);
 
   Stream<NavigationSensorState> get stream => _controller.stream;
   NavigationSensorState get current => _state;
@@ -63,25 +81,33 @@ class NavigationSensorController {
     _accelerometerSubscription = accelerometerEventStream(
       samplingPeriod: SensorInterval.uiInterval,
     ).listen(
-      (event) => _publish(
-        _state.copyWith(
-          accelerationMs2: math.sqrt(
-            event.x * event.x + event.y * event.y + event.z * event.z,
-          ),
-        ),
-      ),
+      (event) {
+        final raw = math.sqrt(
+          event.x * event.x + event.y * event.y + event.z * event.z,
+        );
+        _smoothAccel = _lowPass(_smoothAccel, raw);
+        _publish(_state.copyWith(accelerationMs2: _smoothAccel));
+      },
       onError: (_) {},
     );
     _gyroscopeSubscription = gyroscopeEventStream(
       samplingPeriod: SensorInterval.uiInterval,
     ).listen(
-      (event) => _publish(
-        _state.copyWith(
-          rotationRadS: math.sqrt(
-            event.x * event.x + event.y * event.y + event.z * event.z,
-          ),
-        ),
-      ),
+      (event) {
+        final raw = math.sqrt(
+          event.x * event.x + event.y * event.y + event.z * event.z,
+        );
+        // Calibration du biais au repos : tant que le capteur est quasi
+        // immobile, on accumule la moyenne ; ensuite on la soustrait.
+        if (_gyroCalibCount < _calibrationSamples && raw < _restThresholdRadS) {
+          _gyroBias =
+              (_gyroBias * _gyroCalibCount + raw) / (_gyroCalibCount + 1);
+          _gyroCalibCount++;
+        }
+        final corrected = math.max(0.0, raw - _gyroBias);
+        _smoothGyro = _lowPass(_smoothGyro, corrected);
+        _publish(_state.copyWith(rotationRadS: _smoothGyro));
+      },
       onError: (_) {},
     );
   }
