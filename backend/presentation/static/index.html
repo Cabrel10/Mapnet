@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>MapNet — Cameroun</title>
+
+  <!-- MapLibre GL JS 4.7.x (CDN, no build step) -->
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <!-- Lucide Icons (SVG, no emoji) — pinned: 0.294.0 exposes window.lucide.createIcons -->
+  <script src="https://unpkg.com/lucide@0.294.0/dist/umd/lucide.js"></script>
+
+  <style>
+    :root{
+      --bg:#0f1720; --panel:#ffffff; --ink:#0f1720; --muted:#6b7280;
+      --line:#e5e7eb; --brand:#2563eb; --brand-d:#1d4ed8; --accent:#f97316;
+      --ok:#16a34a; --warn:#d97706; --shadow:0 8px 30px rgba(2,6,23,.18);
+      --radius:14px;
+    }
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html,body{margin:0;height:100%;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink)}
+    #map{position:absolute;inset:0}
+    .lucide{stroke-width:2;vertical-align:middle}
+    button{font-family:inherit;cursor:pointer}
+
+    /* ---------- Search ---------- */
+    .search-wrap{position:absolute;top:14px;left:14px;right:14px;z-index:20;max-width:440px}
+    .search-box{display:flex;align-items:center;gap:8px;background:var(--panel);
+      border-radius:var(--radius);box-shadow:var(--shadow);padding:0 8px 0 12px;height:50px}
+    .search-box .brand{display:flex;align-items:center;justify-content:center;color:var(--brand)}
+    #q{flex:1;border:0;outline:0;font-size:15px;background:transparent;height:100%;color:var(--ink)}
+    .search-box .iconbtn{border:0;background:transparent;color:var(--muted);width:34px;height:34px;
+      border-radius:8px;display:flex;align-items:center;justify-content:center}
+    .search-box .iconbtn:hover{background:#f3f4f6;color:var(--ink)}
+    #q-clear{display:none}
+
+    .results{margin-top:8px;background:var(--panel);border-radius:12px;box-shadow:var(--shadow);
+      overflow:hidden;max-height:60vh;overflow-y:auto;display:none}
+    .results.show{display:block}
+    .res-group-title{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+      color:var(--muted);padding:10px 14px 4px}
+    .res-item{display:flex;gap:11px;align-items:flex-start;padding:9px 14px;border-top:1px solid var(--line);cursor:pointer}
+    .res-item:first-child{border-top:0}
+    .res-item:hover{background:#f8fafc}
+    .res-ico{flex:0 0 auto;width:32px;height:32px;border-radius:9px;display:flex;align-items:center;
+      justify-content:center;background:#eef2ff;color:var(--brand)}
+    .res-txt{min-width:0;flex:1 1 auto}
+    .res-name{font-size:14px;font-weight:600;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .res-sub{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .res-dist{flex:0 0 auto;align-self:center;font-size:11px;font-weight:700;color:var(--muted);
+      background:#f1f5f9;border-radius:8px;padding:2px 7px;white-space:nowrap}
+    .conf-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+    .conf-hi{background:#16a34a}.conf-mid{background:#f59e0b}.conf-lo{background:#ef4444}
+    .res-empty{padding:16px 14px;color:var(--muted);font-size:13px}
+
+    /* ---------- Category chips ---------- */
+    .chips{position:absolute;top:74px;left:14px;right:14px;z-index:15;display:flex;gap:8px;
+      overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+    .chips::-webkit-scrollbar{display:none}
+    .chips.hidden{display:none}
+    .chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;background:var(--panel);
+      border:1px solid var(--line);border-radius:999px;padding:7px 13px;font-size:13px;font-weight:600;
+      box-shadow:0 2px 8px rgba(2,6,23,.08);white-space:nowrap}
+    .chip:hover{border-color:var(--brand);color:var(--brand)}
+    .chip.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+    .chip .lucide{width:15px;height:15px}
+
+    /* ---------- Right controls ---------- */
+    .view-controls{position:absolute;right:14px;top:130px;z-index:15;display:flex;flex-direction:column;
+      gap:8px;background:var(--panel);border-radius:12px;box-shadow:var(--shadow);padding:6px}
+    .view-btn{border:0;background:transparent;color:var(--muted);width:40px;height:40px;border-radius:9px;
+      display:flex;align-items:center;justify-content:center}
+    .view-btn:hover{background:#f3f4f6;color:var(--ink)}
+    .view-btn.active{background:var(--brand);color:#fff}
+
+    .zoom-controls{position:absolute;right:14px;bottom:110px;z-index:15;display:flex;flex-direction:column;
+      gap:1px;background:var(--panel);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+    .zoom-controls button{border:0;background:var(--panel);color:var(--ink);width:44px;height:44px;
+      display:flex;align-items:center;justify-content:center;font-size:20px}
+    .zoom-controls button:hover{background:#f3f4f6}
+    .zoom-controls button+button{border-top:1px solid var(--line)}
+
+    /* ---------- Place panel (bottom sheet) ---------- */
+    .place-panel{position:absolute;left:0;right:0;bottom:0;z-index:30;background:var(--panel);
+      border-radius:18px 18px 0 0;box-shadow:0 -6px 30px rgba(2,6,23,.22);
+      transform:translateY(110%);transition:transform .28s cubic-bezier(.2,.7,.3,1);
+      max-height:52vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0)}
+    .place-panel.show{transform:translateY(0)}
+    .place-panel .grip{width:44px;height:5px;border-radius:3px;background:#d1d5db;margin:9px auto 2px}
+    .pp-head{display:flex;gap:12px;align-items:flex-start;padding:6px 18px 10px}
+    .pp-ico{flex:0 0 auto;width:46px;height:46px;border-radius:12px;display:flex;align-items:center;
+      justify-content:center;background:#eef2ff;color:var(--brand)}
+    .pp-title{font-size:19px;font-weight:700;line-height:1.2;margin:0}
+    .pp-sub{font-size:13px;color:var(--muted);margin:3px 0 0}
+    .pp-close{margin-left:auto;border:0;background:#f3f4f6;color:var(--muted);width:34px;height:34px;
+      border-radius:50%;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+    .pp-body{padding:2px 18px 8px;overflow-y:auto}
+    .pp-row{display:flex;gap:10px;align-items:center;padding:7px 0;font-size:14px;border-top:1px solid var(--line)}
+    .pp-row:first-child{border-top:0}
+    .pp-row .lucide{color:var(--muted);width:18px;height:18px;flex:0 0 auto}
+    .badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;
+      padding:3px 9px;border-radius:999px}
+    .badge.open{background:#dcfce7;color:#15803d}
+    .badge.closed{background:#fee2e2;color:#b91c1c}
+    .badge.unknown{background:#f3f4f6;color:#6b7280}
+    .pp-actions{display:flex;gap:10px;padding:10px 18px 16px}
+    .btn{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:12px;
+      padding:13px;font-size:15px;font-weight:700}
+    .btn-primary{background:var(--brand);color:#fff}
+    .btn-primary:hover{background:var(--brand-d)}
+    .btn-secondary{background:#f3f4f6;color:var(--ink);flex:0 0 auto;padding:13px 18px}
+    .btn .lucide{width:17px;height:17px}
+
+    /* ---------- Navigation ---------- */
+    .nav-top{position:absolute;top:14px;left:14px;right:14px;z-index:40;background:var(--brand);color:#fff;
+      border-radius:14px;box-shadow:var(--shadow);padding:14px 16px;display:none;gap:14px;align-items:center}
+    .nav-top.show{display:flex}
+    .nav-top .lucide{width:30px;height:30px;flex:0 0 auto}
+    .nav-instr{font-size:17px;font-weight:700;line-height:1.2}
+    .nav-dist{font-size:13px;opacity:.9;margin-top:2px}
+    .nav-bottom{position:absolute;left:0;right:0;bottom:0;z-index:40;background:var(--panel);
+      box-shadow:0 -6px 30px rgba(2,6,23,.2);padding:14px 18px;display:none;align-items:center;gap:14px}
+    .nav-bottom.show{display:flex}
+    .nav-eta{font-size:22px;font-weight:800}
+    .nav-meta{font-size:13px;color:var(--muted)}
+    .nav-stop{margin-left:auto;background:#fee2e2;color:#b91c1c;border:0;border-radius:12px;
+      padding:12px 18px;font-weight:700;display:flex;align-items:center;gap:7px}
+
+    /* ---------- Route preview chooser ---------- */
+    .route-choose{position:absolute;left:0;right:0;bottom:0;z-index:35;background:var(--panel);
+      border-radius:18px 18px 0 0;box-shadow:0 -6px 30px rgba(2,6,23,.22);padding:14px 18px 18px;display:none}
+    .route-choose.show{display:block}
+    .rc-title{font-size:16px;font-weight:700;margin:0 0 10px}
+    .rc-opt{display:flex;align-items:center;gap:12px;padding:11px;border:1.5px solid var(--line);
+      border-radius:12px;margin-bottom:8px;cursor:pointer}
+    .rc-opt.sel{border-color:var(--brand);background:#eff6ff}
+    .rc-opt .lucide{color:var(--brand)}
+    .rc-main{font-size:15px;font-weight:700}
+    .rc-meta{font-size:12px;color:var(--muted)}
+    .rc-go{width:100%;margin-top:4px}
+    /* origine libre + profils transport */
+    .rc-endpoints{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+    .rc-ep{display:flex;align-items:center;gap:10px;border:1.5px solid var(--line);border-radius:12px;padding:9px 11px}
+    .rc-ep .lucide{flex:0 0 auto;width:18px;height:18px;color:var(--brand)}
+    .rc-ep.dest .lucide{color:var(--accent)}
+    .rc-ep-txt{min-width:0;flex:1}
+    .rc-ep-lbl{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+    .rc-ep-val{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .rc-ep-btn{border:0;background:#f3f4f6;color:var(--brand);width:32px;height:32px;border-radius:8px;
+      display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+    .rc-ep-btn+.rc-ep-btn{margin-left:4px}
+    .rc-ep-btn:hover{background:#e5edff}
+    .rc-ep-btn.on{background:var(--brand);color:#fff}
+    .rc-origin-search{display:none;margin-top:6px}
+    .rc-origin-search.show{display:block}
+    .rc-origin-search input{width:100%;border:1.5px solid var(--brand);border-radius:10px;padding:9px 11px;font-size:14px;outline:0}
+    .rc-origin-results{margin-top:4px;max-height:140px;overflow-y:auto}
+    .rc-profiles{display:flex;gap:8px;margin-bottom:12px}
+    .rc-prof{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;border:1.5px solid var(--line);
+      border-radius:12px;padding:9px 4px;font-size:11px;font-weight:600;color:var(--muted);background:var(--panel)}
+    .rc-prof .lucide{width:20px;height:20px}
+    .rc-prof.sel{border-color:var(--brand);background:#eff6ff;color:var(--brand)}
+    .rc-hint{font-size:12px;color:var(--muted);margin:-4px 0 10px}
+
+    /* ---------- Status bar + toast ---------- */
+    .statbar{position:absolute;left:14px;right:64px;bottom:16px;z-index:15;display:flex;gap:14px;align-items:center;
+      background:rgba(15,23,32,.86);color:#fff;border-radius:999px;padding:8px 16px;font-size:12px;
+      backdrop-filter:blur(6px);overflow-x:auto;scrollbar-width:none;white-space:nowrap}
+    .statbar::-webkit-scrollbar{display:none}
+    .statbar>span{flex:0 0 auto}
+    .statbar .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(22,163,74,.25);flex:0 0 auto}
+    .statbar b{color:#fff}
+    .toast{position:absolute;left:50%;top:80px;transform:translateX(-50%) translateY(-20px);z-index:60;
+      background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;
+      opacity:0;pointer-events:none;transition:.25s;box-shadow:var(--shadow)}
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+    .fab-locate{position:absolute;right:14px;bottom:56px;z-index:15;width:44px;height:44px;border-radius:50%;
+      background:var(--panel);box-shadow:var(--shadow);border:0;display:flex;align-items:center;justify-content:center;color:var(--brand)}
+    .fab-locate.tracking{background:var(--brand);color:#fff}
+    .sensor-panel{position:absolute;left:14px;top:112px;z-index:18;display:flex;flex-wrap:wrap;gap:6px;
+      max-width:min(620px,calc(100vw - 86px));pointer-events:none}
+    .sensor-chip{display:inline-flex;align-items:center;gap:5px;background:rgba(15,23,32,.9);color:#fff;
+      border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:5px 9px;font-size:11px;backdrop-filter:blur(6px)}
+    .sensor-chip b{font-variant-numeric:tabular-nums}.sensor-chip.warn{background:rgba(153,27,27,.94)}
+    .permission-banner{position:absolute;left:14px;right:14px;top:112px;z-index:55;max-width:620px;
+      background:#7f1d1d;color:#fff;border-radius:12px;box-shadow:var(--shadow);padding:11px 13px;font-size:12px;line-height:1.4}
+    .permission-banner[hidden]{display:none}.permission-banner a{color:#fff;font-weight:700}
+    .maplibregl-ctrl-attrib{font-size:10px}
+    /* Compas custom : sous les contrôles de vue, à droite */
+    .compass-ctrl{position:absolute;right:14px;top:250px;z-index:15;display:flex;flex-direction:column;
+      align-items:center;gap:6px;background:var(--panel);border-radius:12px;box-shadow:var(--shadow);padding:6px}
+    .compass-btn{border:0;background:transparent;width:40px;height:40px;border-radius:9px;display:flex;
+      align-items:center;justify-content:center;padding:0}
+    .compass-btn:hover{background:#f3f4f6}
+    #compass-needle{transition:transform .2s ease-out;transform-origin:50% 50%}
+    .compass-cardinals{display:grid;grid-template-columns:1fr 1fr;gap:3px;width:100%}
+    .compass-cardinals button{border:0;background:#f3f4f6;color:var(--ink);border-radius:6px;font-size:11px;
+      font-weight:700;padding:4px 0;line-height:1}
+    .compass-cardinals button:hover{background:var(--brand);color:#fff}
+    @media(max-width:480px){.search-wrap{max-width:none}.view-controls{top:120px}.compass-ctrl{top:240px}.sensor-panel,.permission-banner{top:112px}}
+    /* Marqueur "ICI" du résultat de recherche / destination */
+    .dest-marker{display:flex;flex-direction:column;align-items:center;cursor:pointer;filter:drop-shadow(0 3px 6px rgba(0,0,0,.35))}
+    .dest-pin{width:34px;height:34px;border-radius:50% 50% 50% 0;background:var(--accent,#e11d48);transform:rotate(-45deg);
+      display:flex;align-items:center;justify-content:center;border:2px solid #fff;animation:destDrop .45s ease-out}
+    .dest-pin .lucide{transform:rotate(45deg);color:#fff}
+    .dest-label{margin-top:6px;background:#111;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;
+      white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+    @keyframes destDrop{0%{transform:rotate(-45deg) translateY(-14px);opacity:0}100%{transform:rotate(-45deg) translateY(0);opacity:1}}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Search -->
+  <div class="search-wrap">
+    <div class="search-box">
+      <span class="brand"><i data-lucide="map-pin" class="lucide" width="22" height="22"></i></span>
+      <input id="q" type="text" placeholder="Rechercher un lieu, un quartier, un service…"
+             autocomplete="off" spellcheck="false" enterkeyhint="search">
+      <button id="q-clear" class="iconbtn" title="Effacer"><i data-lucide="x" class="lucide" width="18" height="18"></i></button>
+      <button id="q-go" class="iconbtn" title="Rechercher"><i data-lucide="search" class="lucide" width="18" height="18"></i></button>
+    </div>
+    <div id="results" class="results"></div>
+  </div>
+
+  <!-- Category chips -->
+  <div id="chips" class="chips"></div>
+
+  <div id="permission-banner" class="permission-banner" hidden></div>
+  <div id="sensor-panel" class="sensor-panel" aria-live="polite">
+    <span id="gps-chip" class="sensor-chip"><i data-lucide="locate-fixed" class="lucide" width="13" height="13"></i> GPS <b id="gps-state">inactif</b></span>
+    <span class="sensor-chip"><i data-lucide="compass" class="lucide" width="13" height="13"></i> Cap <b id="heading-state">—</b></span>
+    <span class="sensor-chip"><i data-lucide="gauge" class="lucide" width="13" height="13"></i> Accel <b id="accel-state">—</b></span>
+    <span class="sensor-chip"><i data-lucide="rotate-3d" class="lucide" width="13" height="13"></i> Gyro <b id="gyro-state">—</b></span>
+    <span id="reroute-chip" class="sensor-chip"><i data-lucide="route" class="lucide" width="13" height="13"></i> Route <b id="reroute-state">prête</b></span>
+  </div>
+
+  <!-- View controls -->
+  <div class="view-controls">
+    <button id="btn-2d" class="view-btn active" title="Vue 2D" onclick="setView('2d')"><i data-lucide="square" class="lucide" width="20" height="20"></i></button>
+    <button id="btn-3d" class="view-btn" title="Vue 3D" onclick="setView('3d')"><i data-lucide="box" class="lucide" width="20" height="20"></i></button>
+    <button id="btn-sat" class="view-btn" title="Satellite" onclick="toggleSatellite()"><i data-lucide="satellite" class="lucide" width="20" height="20"></i></button>
+  </div>
+
+  <!-- Compas / orientation (custom, fiable) : clic = remettre le nord.
+       Molette/glisser-droit fait pivoter la carte ; l'aiguille suit le bearing. -->
+  <div class="compass-ctrl">
+    <button id="btn-compass" class="compass-btn" title="Remettre au nord" onclick="resetNorth()">
+      <svg id="compass-needle" viewBox="0 0 40 40" width="34" height="34" aria-hidden="true">
+        <circle cx="20" cy="20" r="18" fill="#fff" stroke="#e5e7eb" stroke-width="1"/>
+        <polygon points="20,5 25,21 20,18 15,21" fill="#ef4444"/>
+        <polygon points="20,35 25,19 20,22 15,19" fill="#64748b"/>
+        <text x="20" y="12" text-anchor="middle" font-size="7" font-weight="700" fill="#ef4444">N</text>
+      </svg>
+    </button>
+    <div class="compass-cardinals">
+      <button title="Nord"  onclick="orientTo(0)">N</button>
+      <button title="Est"   onclick="orientTo(90)">E</button>
+      <button title="Sud"   onclick="orientTo(180)">S</button>
+      <button title="Ouest" onclick="orientTo(270)">O</button>
+    </div>
+  </div>
+
+  <!-- Zoom -->
+  <div class="zoom-controls">
+    <button onclick="map.zoomIn()" aria-label="Zoom avant">+</button>
+    <button onclick="map.zoomOut()" aria-label="Zoom arrière">−</button>
+  </div>
+  <button id="btn-locate" class="fab-locate" title="Activer GPS et capteurs" onclick="activateTracking()"><i data-lucide="locate-fixed" class="lucide" width="20" height="20"></i></button>
+
+  <!-- Place panel -->
+  <div id="place-panel" class="place-panel">
+    <div class="grip"></div>
+    <div class="pp-head">
+      <div id="pp-ico" class="pp-ico"><i data-lucide="map-pin" class="lucide" width="24" height="24"></i></div>
+      <div style="min-width:0">
+        <h2 id="pp-title" class="pp-title">—</h2>
+        <p id="pp-sub" class="pp-sub">—</p>
+      </div>
+      <button class="pp-close" onclick="closePlacePanel()" aria-label="Fermer"><i data-lucide="x" class="lucide" width="18" height="18"></i></button>
+    </div>
+    <div id="pp-body" class="pp-body"></div>
+    <div class="pp-actions">
+      <button class="btn btn-primary" onclick="planRouteToCurrent()"><i data-lucide="navigation" class="lucide" width="17" height="17"></i> Itinéraire</button>
+      <button class="btn btn-secondary" onclick="closePlacePanel()">Fermer</button>
+    </div>
+  </div>
+
+  <!-- Route chooser : origine libre + profils transport -->
+  <div id="route-choose" class="route-choose">
+    <p class="rc-title">Itinéraire</p>
+
+    <!-- Points de départ / arrivée -->
+    <div class="rc-endpoints">
+      <div class="rc-ep origin">
+        <i data-lucide="circle-dot" class="lucide"></i>
+        <div class="rc-ep-txt">
+          <div class="rc-ep-lbl">Origine</div>
+          <div id="rc-origin-val" class="rc-ep-val">Ma position (GPS)</div>
+        </div>
+        <button class="rc-ep-btn on" id="rc-o-gps" title="Ma position GPS" onclick="setOriginMode('gps')"><i data-lucide="locate-fixed" class="lucide" width="16" height="16"></i></button>
+        <button class="rc-ep-btn" id="rc-o-map" title="Choisir sur la carte" onclick="setOriginMode('map')"><i data-lucide="map-pin" class="lucide" width="16" height="16"></i></button>
+        <button class="rc-ep-btn" id="rc-o-search" title="Rechercher l'origine" onclick="setOriginMode('search')"><i data-lucide="search" class="lucide" width="16" height="16"></i></button>
+      </div>
+      <div id="rc-origin-search" class="rc-origin-search">
+        <input id="rc-origin-q" type="text" placeholder="Rechercher un lieu de départ…" autocomplete="off" spellcheck="false">
+        <div id="rc-origin-results" class="rc-origin-results results"></div>
+      </div>
+      <div class="rc-ep dest">
+        <i data-lucide="map-pin" class="lucide"></i>
+        <div class="rc-ep-txt">
+          <div class="rc-ep-lbl">Destination</div>
+          <div id="rc-dest-val" class="rc-ep-val">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Profils de transport -->
+    <div class="rc-profiles" id="rc-profiles">
+      <button class="rc-prof sel" data-profile="pedestrian" onclick="setProfile('pedestrian')"><i data-lucide="footprints" class="lucide"></i>Piéton</button>
+      <button class="rc-prof" data-profile="auto" onclick="setProfile('auto')"><i data-lucide="car" class="lucide"></i>Voiture</button>
+      <button class="rc-prof" data-profile="motorcycle" onclick="setProfile('motorcycle')"><i data-lucide="bike" class="lucide"></i>Moto</button>
+      <button class="rc-prof" data-profile="taxi" onclick="setProfile('taxi')"><i data-lucide="car-taxi-front" class="lucide"></i>Taxi</button>
+    </div>
+
+    <div id="rc-hint" class="rc-hint"></div>
+    <div id="rc-list"></div>
+    <button class="btn btn-primary rc-go" id="rc-go" onclick="startNavigation()"><i data-lucide="navigation-2" class="lucide" width="17" height="17"></i> Démarrer</button>
+  </div>
+
+  <!-- Navigation overlays -->
+  <div id="nav-top" class="nav-top">
+    <i id="nav-icon" data-lucide="corner-up-right" class="lucide"></i>
+    <div><div id="nav-instr" class="nav-instr">—</div><div id="nav-dist" class="nav-dist">—</div></div>
+  </div>
+  <div id="nav-bottom" class="nav-bottom">
+    <div><div id="nav-eta" class="nav-eta">—</div><div id="nav-meta" class="nav-meta">—</div></div>
+    <button class="nav-stop" onclick="stopNavigation()"><i data-lucide="x" class="lucide" width="16" height="16"></i> Arrêter</button>
+  </div>
+
+  <!-- Status bar : compteurs réels par couche (PostGIS) -->
+  <div class="statbar">
+    <span class="dot"></span><b>LIVE</b>
+    <span title="POI indexés (raw_places)">POI indexés <b id="s-places">—</b></span>
+    <span title="Bâtiments (mapnet_buildings)">Bâtiments <b id="s-buildings">—</b></span>
+    <span title="Segments de route (mapnet_edges)">Routes <b id="s-roads">—</b></span>
+    <span title="Quartiers & divisions (mapnet_divisions)">Quartiers <b id="s-districts">—</b></span>
+    <span title="Captures terrain">Captures <b id="s-caps">0</b></span>
+    <span title="Agents actifs">Agents <b id="s-agents">0</b></span>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/navigation_math.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
