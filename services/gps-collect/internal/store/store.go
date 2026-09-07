@@ -88,6 +88,91 @@ type TracePoint struct {
 	Bearing     *float64   `json:"bearing"`
 }
 
+// EnsurePositionsTable creates the agent_positions table if absent.
+// Called at startup so the service is self-initializing (no manual SQL step).
+func (s *Store) EnsurePositionsTable(ctx context.Context) error {
+	const q = `
+		CREATE TABLE IF NOT EXISTS agent_positions (
+			id BIGSERIAL PRIMARY KEY,
+			agent_id TEXT NOT NULL,
+			latitude DOUBLE PRECISION NOT NULL,
+			longitude DOUBLE PRECISION NOT NULL,
+			accuracy DOUBLE PRECISION,
+			speed_kmh DOUBLE PRECISION,
+			bearing DOUBLE PRECISION,
+			recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			geom GEOGRAPHY(POINT,4326)
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_positions_agent ON agent_positions(agent_id);
+		CREATE INDEX IF NOT EXISTS idx_agent_positions_time ON agent_positions(recorded_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_agent_positions_geom ON agent_positions USING GIST(geom);`
+	_, err := s.pool.Exec(ctx, q)
+	return err
+}
+
+// PositionUpdate is one live position report from a field agent.
+type PositionUpdate struct {
+	AgentID    string     `json:"agent_id"`
+	Latitude   float64    `json:"lat"`
+	Longitude  float64    `json:"lon"`
+	Accuracy   *float64   `json:"accuracy"`
+	SpeedKmh   *float64   `json:"speed_kmh"`
+	Bearing    *float64   `json:"bearing"`
+	RecordedAt *time.Time `json:"timestamp"`
+}
+
+// InsertPosition persists one live agent position.
+func (s *Store) InsertPosition(ctx context.Context, p PositionUpdate) error {
+	var recorded any
+	if p.RecordedAt != nil {
+		recorded = *p.RecordedAt
+	} else {
+		recorded = time.Now().UTC()
+	}
+	const q = `
+		INSERT INTO agent_positions
+			(agent_id, latitude, longitude, accuracy, speed_kmh, bearing, recorded_at, geom)
+		VALUES ($1,$2::double precision,$3::double precision,$4,$5,$6,$7,
+			ST_SetSRID(ST_MakePoint($3::double precision,$2::double precision),4326))`
+	_, err := s.pool.Exec(ctx, q,
+		p.AgentID, p.Latitude, p.Longitude, p.Accuracy, p.SpeedKmh, p.Bearing, recorded)
+	return err
+}
+
+// AgentPosition is the latest known position of one agent.
+type AgentPosition struct {
+	AgentID    string    `json:"agent_id"`
+	Latitude   float64   `json:"lat"`
+	Longitude  float64   `json:"lon"`
+	Accuracy   *float64  `json:"accuracy"`
+	RecordedAt time.Time `json:"timestamp"`
+}
+
+// LatestPositions returns the most recent position per agent within the window.
+func (s *Store) LatestPositions(ctx context.Context, windowMinutes int) ([]AgentPosition, error) {
+	const q = `
+		SELECT DISTINCT ON (agent_id)
+			agent_id, latitude, longitude, accuracy, recorded_at
+		FROM agent_positions
+		WHERE recorded_at > now() - ($1::int * interval '1 minute')
+		ORDER BY agent_id, recorded_at DESC`
+	rows, err := s.pool.Query(ctx, q, windowMinutes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []AgentPosition{}
+	for rows.Next() {
+		var a AgentPosition
+		if err := rows.Scan(&a.AgentID, &a.Latitude, &a.Longitude, &a.Accuracy, &a.RecordedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // GetTrace returns all points for a trace ordered by time.
 func (s *Store) GetTrace(ctx context.Context, traceID string) ([]TracePoint, error) {
 	const q = `

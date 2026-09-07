@@ -1,0 +1,56 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+android {
+    namespace = "com.cabrel10.mapnet_mobile"
+    compileSdk = 34
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        // Java 17 toolchain (aligné avec openjdk-17-jdk du VPS)
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        applicationId = "com.cabrel10.mapnet_mobile"
+        // Android 10+ (API 29) minimum, ciblage API 34 (Android 14)
+        minSdk = 29
+        targetSdk = 34
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+
+    buildTypes {
+        release {
+            // Signature debug pour build de démonstration terrain.
+            // TODO production : remplacer par un keystore de release dédié.
+            signingConfig = signingConfigs.debug
+            // Optimisation taille : R8 (minification bytecode) + suppression
+            // des ressources non référencées. Règles ProGuard dans
+            // proguard-rules.pro pour protéger les plugins natifs (JNI).
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    // Le build standard produit un APK universel directement installable.
+    // Les APK par ABI restent disponibles à la demande via
+    // `flutter build apk --split-per-abi` pour optimiser la distribution.
+}
+
+flutter {
+    source = "../.."
+}

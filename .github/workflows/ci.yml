@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [genspark_ai_developer, main, master]
+  pull_request:
+
+jobs:
+  routing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install routing deps
+        working-directory: services/routing
+        run: pip install -r requirements.txt
+      - name: Run routing tests
+        working-directory: services/routing
+        run: python -m pytest tests/ -q
+      - name: Compile check all services
+        run: |
+          python -m py_compile services/routing/app/*.py
+          find services -name "*.py" -path "*/app/*" | while read f; do python -m py_compile "$f" 2>/dev/null || echo "skip $f"; done

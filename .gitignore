@@ -13,3 +13,24 @@ __pycache__/
 *.pyc
 # Env
 .env
+# MapNet mobile (Flutter) build artifacts
+mobile/build/
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/apk_build.log
+mobile/android/.gradle/
+mobile/android/local.properties
+# logs
+*.log
+mapnet_server.log
+__pycache__/
+*.pyc
+# APK distribution artifacts (binaires lourds, servis par HTTP)
+apk_dist/
+# Données runtime du backend (snapshots / caches générés)
+backend/data/captures_snapshot.json
+backend/data/nominatim_cache.json
+
+# compiled gateway binary (build artifact)
+services/gateway/gateway

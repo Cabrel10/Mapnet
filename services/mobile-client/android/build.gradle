@@ -1,0 +1,48 @@
+// MAPNET NAVIGATION — Configuration Gradle unifiée de niveau racine.
+// Certains plugins Flutter lisent `flutter.compileSdkVersion` depuis leur
+// sous-projet, où l'extension du module :app n'est pas visible avec AGP 8.1.
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+
+    if (project.name != "app" && !project.ext.has("flutter")) {
+        project.ext.flutter = [
+            compileSdkVersion: 34,
+            targetSdkVersion : 34,
+            minSdkVersion    : 29,
+            ndkVersion       : "26.1.10909125"
+        ]
+    }
+
+    if (project.name != "app") {
+        project.afterEvaluate { p ->
+            if (p.hasProperty("android")) {
+                p.android {
+                    compileSdkVersion 34
+                    if (namespace == null) {
+                        namespace p.group
+                    }
+                }
+            }
+        }
+    }
+}
+
+subprojects {
+    if (project.name != "app") {
+        project.evaluationDependsOn(":app")
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
