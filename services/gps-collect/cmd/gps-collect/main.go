@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +50,10 @@ func main() {
 	}
 	defer db.Close()
 
+	if err := db.EnsurePositionsTable(ctx); err != nil {
+		log.Printf("warn: ensure agent_positions table: %v", err)
+	}
+
 	prod := broker.NewProducer(bootstrap, topic)
 	defer prod.Close()
 
@@ -58,6 +63,8 @@ func main() {
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("POST /api/v1/collecte/gpx/upload", s.uploadGPX)
 	mux.HandleFunc("GET /api/v1/traces/{trace_id}", s.getTrace)
+	mux.HandleFunc("POST /api/v1/collecte/position", s.postPosition)
+	mux.HandleFunc("GET /api/v1/positions", s.getPositions)
 
 	srv := &http.Server{
 		Addr:              ":" + port,
@@ -197,6 +204,62 @@ func (s *server) getTrace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+// postPosition ingests one live GPS position report from a field agent
+// (collection app). Persists to agent_positions and republishes to Kafka so
+// map-engine / dashboards can track agents in near real time.
+func (s *server) postPosition(w http.ResponseWriter, r *http.Request) {
+	var p store.PositionUpdate
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&p); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	p.AgentID = strings.TrimSpace(p.AgentID)
+	if p.AgentID == "" {
+		writeErr(w, http.StatusBadRequest, "agent_id is required")
+		return
+	}
+	if p.Latitude < -90 || p.Latitude > 90 || p.Longitude < -180 || p.Longitude > 180 {
+		writeErr(w, http.StatusBadRequest, "lat/lon out of range")
+		return
+	}
+
+	ctx := r.Context()
+	if err := s.db.InsertPosition(ctx, p); err != nil {
+		log.Printf("insert position: %v", err)
+		writeErr(w, http.StatusInternalServerError, "failed to persist position")
+		return
+	}
+
+	// Best-effort Kafka fan-out for live consumers; never fail the request on it.
+	payload := map[string]any{
+		"agent_id": p.AgentID, "latitude": p.Latitude, "longitude": p.Longitude,
+		"accuracy": p.Accuracy, "speed_kmh": p.SpeedKmh, "bearing": p.Bearing,
+	}
+	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	_ = s.prod.Publish(pctx, p.AgentID, payload)
+	cancel()
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "agent_id": p.AgentID})
+}
+
+// getPositions returns the latest known position of each agent seen recently
+// (default 5 minutes, overridable with ?minutes=N).
+func (s *server) getPositions(w http.ResponseWriter, r *http.Request) {
+	window := 5
+	if m := r.URL.Query().Get("minutes"); m != "" {
+		if v, err := strconv.Atoi(m); err == nil && v > 0 && v <= 1440 {
+			window = v
+		}
+	}
+	rows, err := s.db.LatestPositions(r.Context(), window)
+	if err != nil {
+		log.Printf("latest positions: %v", err)
+		writeErr(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": rows, "count": len(rows)})
 }
 
 var _ = errors.New // keep errors import stable across edits
