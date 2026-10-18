@@ -1,0 +1,68 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1. Créer la hiérarchie d'erreurs `ProviderError` dans les deux services": [
+      {
+        "executionId": "eaa9bcf2-f400-4286-a18c-dec9e099ed88",
+        "chatSessionId": "sess_1461c398-b703-4b07-90d6-e740e4f4a74e",
+        "timestamp": 1790880984450
+      }
+    ],
+    "2.1 Créer `services/places/app/domain/__init__.py` (vide) et `services/places/app/domain/geo_result.py`": [
+      {
+        "executionId": "eaa9bcf2-f400-4286-a18c-dec9e099ed88",
+        "chatSessionId": "sess_1461c398-b703-4b07-90d6-e740e4f4a74e",
+        "timestamp": 1790881019464
+      }
+    ],
+    "3.1 Créer `services/routing/app/domain/__init__.py` (vide) et `services/routing/app/domain/route.py`": [
+      {
+        "executionId": "eaa9bcf2-f400-4286-a18c-dec9e099ed88",
+        "chatSessionId": "sess_1461c398-b703-4b07-90d6-e740e4f4a74e",
+        "timestamp": 1790881033874
+      }
+    ],
+    "4.1 Créer `services/places/app/providers/__init__.py` (vide) et `services/places/app/providers/base.py`": [
+      {
+        "executionId": "eaa9bcf2-f400-4286-a18c-dec9e099ed88",
+        "chatSessionId": "sess_1461c398-b703-4b07-90d6-e740e4f4a74e",
+        "timestamp": 1790881046200
+      }
+    ],
+    "4.2 Créer `services/routing/app/providers/__init__.py` (vide) et `services/routing/app/providers/base.py`": [
+      {
+        "executionId": "eaa9bcf2-f400-4286-a18c-dec9e099ed88",
+        "chatSessionId": "sess_1461c398-b703-4b07-90d6-e740e4f4a74e",
+        "timestamp": 1790881071645
+      }
+    ],
+    "5.1 Créer `services/places/app/providers/tomtom.py`": [
+      {
+        "executionId": "eaa9bcf2-f400-4286-a18c-dec9e099ed88",
+        "chatSessionId": "sess_1461c398-b703-4b07-90d6-e740e4f4a74e",
+        "timestamp": 1790881098289
+      }
+    ],
+    "6. Checkpoint — tests providers/tomtom.py (places)": [
+      {
+        "executionId": "eaa9bcf2-f400-4286-a18c-dec9e099ed88",
+        "chatSessionId": "sess_1461c398-b703-4b07-90d6-e740e4f4a74e",
+        "timestamp": 1790881123650
+      }
+    ],
+    "7.1 Créer `services/places/app/providers/nominatim.py`": [
+      {
+        "executionId": "eaa9bcf2-f400-4286-a18c-dec9e099ed88",
+        "chatSessionId": "sess_1461c398-b703-4b07-90d6-e740e4f4a74e",
+        "timestamp": 1790881147407
+      }
+    ],
+    "8.1 Créer `services/places/app/geocoder.py`": [
+      {
+        "executionId": "eaa9bcf2-f400-4286-a18c-dec9e099ed88",
+        "chatSessionId": "sess_1461c398-b703-4b07-90d6-e740e4f4a74e",
+        "timestamp": 1790881176158
+      }
+    ]
+  }
+}
